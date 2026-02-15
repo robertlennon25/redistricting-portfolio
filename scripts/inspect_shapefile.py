@@ -5,6 +5,7 @@ import geopandas as gpd
 import pandas as pd
 import re
 
+#check these
 VOTE_PATTERNS = [
     r"\bDEM\b", r"\bREP\b", r"DEMOCRAT", r"REPUBLIC",
     r"\bPRES\b", r"PRESIDENT", r"\bGOV\b", r"\bSEN\b", r"\bUSS\b",
