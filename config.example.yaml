@@ -1,0 +1,12 @@
+data:
+  map_pack_dir: "assets/il2022_precincts"
+
+run:
+  algo: "greedy_packing"
+  maximize: "dem"          # or "gop"
+  num_districts: 17
+  pop_tolerance: 0.05
+  seed: 42
+
+output:
+  out_dir: "outputs"

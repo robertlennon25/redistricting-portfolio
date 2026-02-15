@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Data / Generated
+assets/
+outputs/
+*.shp
+*.shx
+*.dbf
+*.prj
+*.cpg
+*.geojson
+*.topojson
+*.parquet
+
+# Local config
+config.yaml
+
+# Node
+apps/web/node_modules/
+apps/web/.next/
+
+# macOS
+.DS_Store
