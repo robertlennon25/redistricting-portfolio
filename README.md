@@ -1,170 +1,315 @@
+ # Illinois Redistricting Experimentation Platform
+
+A computational redistricting research and visualization project
+
+## Project Status
+
+This project is currently under active development. Core pipeline components are functional, the frontend visualization layer is live, and greedy redistricting runs can be generated and viewed interactively.
+
+Algorithm refinement, constraint improvements, and additional methods such as constrained k-means are still in progress.
+
+This repository represents an evolving computational redistricting lab.
+
 ## Overview
 
-This project uses Illinois precinct-level voter data to generate districting figures using a variety of algorithms, including greedy packing and constrained k-means clustering. It demonstrates different approaches to partitioning the state into 17 congressional districts while respecting population balance, contiguity, and partisan objectives.
+This project builds a full-stack redistricting experimentation platform consisting of:
 
-## Dependencies
+A Python computational pipeline for building map packs and generating district assignments
 
-* Python 3.7+
-* geopandas
-* networkx
-* pandas
-* numpy
-* matplotlib
-* shapely
-* **k_means_constrained** (used in `kmeans_constrained_package.py`)
+A greedy packing algorithm capable of maximizing seat share for a selected party
+
+A static web frontend built with Next.js, React, and Leaflet
+
+A deployment model designed for static hosting environments such as Vercel
+
+### The goal is to explore:
+
+How different optimization objectives influence seat outcomes
+
+The relationship between geographic contiguity and political advantage
+
+The behavior of heuristic algorithms under real precinct-level data
+
+## Data Source
+
+Precinct-level election data used in this project was obtained from:
+
+Redistricting Data Hub
+https://redistrictingdatahub.org/
+
+The Redistricting Data Hub provides curated and standardized election datasets for research and public use. We gratefully acknowledge their efforts in maintaining high-quality, accessible redistricting data.
+
+This repository does not include raw shapefiles due to file size and licensing considerations. Users must supply their own precinct-level shapefile via configuration.
+
+# Architecture Overview
+
+This system is organized into three layers:
+
+## 1. Data and Algorithm Layer (Python)
+
+### Responsible for:
+
+Reading election shapefiles
+
+Building adjacency graphs
+
+Computing vote totals
+
+Running redistricting algorithms
+
+Exporting frontend-ready GeoJSON
+
+## 2. Static Run Layer
+
+### Each algorithm run produces a timestamped output folder containing:
+
+map_data.geojson (precinct geometries with merged data)
+
+districts.geojson (dissolved district boundaries)
+
+district_stats.json
+
+map.png (static preview image)
+
+These are written to:
+
+apps/web/public/outputs/<run_name_timestamp>/
+
+A manifest file at:
+
+apps/web/public/outputs/latest.json
+
+tracks the most recent run per algorithm variant so the frontend can auto-load it.
+
+## 3. Frontend Visualization Layer
+
+### Built with:
+
+Next.js
+
+React
+
+React-Leaflet
+
+OpenStreetMap tiles
+
+### The frontend:
+
+Loads outputs/latest.json
+
+Resolves the latest timestamped runs
+
+Fetches map_data.geojson, district_stats.json, and districts.geojson
+
+Renders interactive district maps
+
+Provides styling toggles and run selection
+
+No backend server is required; everything is statically served.
+
+<!-- ## Repository Structure -->
+
+<!-- .
+├── scripts/
+├── src/
+│ └── gerry/
+├── apps/web/
+│ ├── pages/
+│ ├── components/
+│ └── public/
+│ └── outputs/
+├── assets/ (generated map packs, not committed)
+├── outputs/ (local archival runs, not committed)
+└── config.example.yaml -->
+
+# End-to-End Pipeline
+## Step 1: Build Map Pack
+
+Run the build_map_pack.py script with a valid configuration file.
+
+### This step:
+
+Loads the precinct election shapefile
+
+Computes dem_votes and rep_votes
+
+Computes weight (two-party vote proxy)
+
+Builds adjacency graph
+
+Computes centroids
+
+Exports static pack files
+
+Output directory:
+
+assets/<pack_name>/
+
+Files produced include shapes.geojson, attributes.csv, adjacency.json, id_to_idx.json, and idx_to_id.json.
+
+## Step 2: Run Greedy Packing
+
+Run run_greedy_pack.py with the desired maximize flag (dem or rep).
+
+### This step:
+
+Loads the map pack
+
+Runs greedy packing label assignment
+
+Performs contiguity fix pass 1
+
+Balances population
+
+Performs contiguity fix pass 2
+
+Computes district statistics
+
+Exports precinct GeoJSON and dissolved district overlays
+
+Writes a timestamped folder under apps/web/public/outputs
+
+Updates outputs/latest.json
+
+Example structure:
+
+apps/web/public/outputs/
+greedy_dem_YYYYMMDD_HHMMSS/
+greedy_rep_YYYYMMDD_HHMMSS/
+latest.json
+
+## Step 3: Frontend Visualization
+
+Navigate to apps/web and start the development server.
+
+The frontend dynamically:
+
+Reads outputs/latest.json
+
+Loads the latest greedy_dem or greedy_rep run
+
+Renders the map
+
+Provides run selection and styling toggles
+
+### Features include:
+
+Run selector (Greedy Dem latest / Greedy GOP latest)
+
+Rainbow district coloring
+
+Red/Blue winner coloring
+
+Bold district boundary overlay
+
+Adjustable outline thickness
+
+Hover tooltips showing precinct and district totals
+
+Current Algorithms
+Greedy Packing
+
+The current greedy implementation attempts to:
+
+Maximize seat share for the selected party
+
+Maintain population balance within tolerance
+
+Enforce contiguity constraints
+
+Post-adjust populations
+
+## Current limitation: 
+greedy runs for both parties produce symmetric seat counts under the current objective structure. Further objective differentiation and constraint tuning are required.
+
+## Deployment Model
+
+This project is designed for static deployment.
+
+All run outputs must be written inside:
+
+apps/web/public/outputs/
+
+This allows:
+
+Local preview
+
+Easy Vercel deployment
+
+No backend server
+
+Configuration
+
+Users must provide:
+
+Precinct election shapefile path
+
+Unit ID column name
+
+CRS
+
+Algorithm parameters
+
+A config.example.yaml file is provided as a template. Do not commit config.yaml if it contains absolute paths.
+
+Work In Progress and TODO
+Algorithm Improvements
+
+Fix greedy objective symmetry
+
+Improve maximize logic sensitivity
+
+Fix contiguity constraint enforcement
+
+Get constrained KMeans running
+
+Refactor population balancing logic
+
+Add objective score tracking
+
+Add compactness metrics
+
+Frontend Improvements
+
+Add mouseover capability back
+
+Improve tooltip styling
+
+Add margin intensity shading
+
+Add compactness metrics display
+
+Add seat count summary banner
+
+Add algorithm comparison view
+
+Architecture Improvements
+
+Convert to Pack v2 format
+
+Add run metadata JSON
+
+Add reproducibility seed tracking
+
+Add performance profiling
+
+### Research Intent
+
+This project is intended as:
+
+A computational redistricting experimentation platform
+
+A portfolio demonstration of geospatial data processing and optimization
+
+A sandbox for testing partisan objectives and constraints
+
+It is not intended as a production-grade redistricting system.
+
+## Disclaimer
+
+Redistricting is a politically and legally complex process. This project is a computational experiment and research tool.
+
+All data remains subject to the licensing terms of the Redistricting Data Hub.
 
 
-
-## Data
-
-The scripts expect an Illinois 2022 General Election precinct-level shapefile. Set the `SHAPEFILE_PATH` variable at the top of each script to point to the local `.shp` file.
-
-## Usage
-
-1. Update `SHAPEFILE_PATH` in each script to your local precinct shapefile path.
-2. Install dependencies, e.g.:
-
-   ```bash
-   pip install geopandas networkx pandas numpy matplotlib shapely k_means_constrained
-   ```
-
-3. Run the scripts:
-
-   ```bash
-   python greedy_packing.py --maximize dem
-   python kmeans_constrained_package.py
-   python kmeans_constrained_hard_pop.py
-   python kmeans_constrained_soft.py
-   python kmeans_constrained_hard_pop_contiguity_compact.py
-   python linreg_voters.py
-   python plot_precincts.py
-   ```
-
-4. Outputs (shapefiles, CSVs, figures) will be saved in each script’s designated output directory.
-
-## File Descriptions
-
-### `greedy_packing.py`
-
-Implements a greedy, seed-and-grow districting algorithm:
-
-* **compute_votes**: aggregates Democratic and Republican vote totals and precinct population
-* **build_adjacency**: constructs a graph of precinct adjacencies
-* **greedy_assign**: seeds districts with high vote share precincts, grows outward to fill
-* **enforce_contiguity**: fixes disjointed district pieces
-* **balance_population**: swaps precincts to meet ±5% ideal population
-* **evaluate_districts**: reports vote totals and seat counts
-* **Output**: saves shapefile `submission_figures/output_greedy_packing2_vX.shp` and corresponding map PNG/CSV
-
-### `kmeans_constrained_package.py`
-
-Uses the `k_means_constrained` library to enforce size constraints on clusters:
-
-* **expand_by_population**: upscales representation of populous precincts
-* **KMeansConstrained**: applies constrained k-means
-* Maps clustered labels back to original precincts
-* **Output**: saves to `figures_sectionv5/kmeans_constrained_districts.csv` and a PNG map
-
-### `kmeans_constrained_hard_pop.py`
-
-Custom constrained k-means with hard population cap:
-
-* Penalizes overpopulated districts with a quadratic term
-* Assigns each precinct to the lowest-score valid cluster
-* Updates centers each iteration
-* **Output**: PNG map and `kmeans_constrained_hard_pop/district_sizes_vX.csv`
-
-### `kmeans_constrained_soft.py`
-
-Custom constrained k-means with soft penalties and contiguity:
-
-* Runs multiple restarts of randomized seeds
-* **run_seed**: assigns based on distance, contiguity, and population reward
-* Removes enclave fragments after assignment
-* **Outputs**: 
-  * `constrained_kmeans_districts.csv`
-  * Text summary of seat outcomes and margins
-  * PNG map with annotations
-
-### `kmeans_constrained_hard_pop_contiguity_compact.py`
-
-Adds compactness scoring to hard population/contiguity-constrained k-means:
-
-* Scoring function = distance + contiguity bonus + population penalty
-* Computes square-space and Polsby-Popper compactness scores
-* **Output**: PNG map and CSV with compactness/district sizes in `kmeans_constrained_hard_pop/`
-
-### `linreg_voters.py`
-
-Performs linear regression to estimate presidential vote share based on local variables:
-
-* **merge_vote_data**: joins 2020 presidential data with the precinct shapefile
-* **run_regression**: computes linear fit for Dem % vs. covariates (e.g., area, population)
-* **Output**: regression diagnostics and scatter plots saved to `submission_figures/output_linreg_voters_vX.png`/`.csv`
-
-### `plot_precincts.py`
-
-Creates visualizations of precinct-level and district-level vote outcomes:
-
-* **plot_votes_by_district**: shows Democratic margin by district
-* **plot_precincts_with_districts**: shades precincts by district assignment
-* **Output**: saves PNG figures to `submission_figures/output_plot_precincts_vX.png`
-
-## Outputs
-
-* **Shapefiles**: e.g., `output_greedy_packing2_vX.shp`
-* **CSV files**: district assignments and diagnostics (e.g., `district_sizes_vX.csv`)
-* **Figures**: PNG maps in `submission_figures/`, `figures_sectionv5/`, or `kmeans_constrained_hard_pop/`
-* **Text summaries**: seat counts and margins for soft-constrained k-means runs
-
-### Additional Visualization Scripts (not part of K-Means)
-
-#### `plot_non_house_votes.py`
-- Creates visualizations for non-congressional races or voting patterns.
-- **Output**: saves visualizations as PNG files to designated visualization directories.
-
-#### `plot_precincts.py`
-- Generates visualizations to show precinct-level voting distributions.
-- **Output**: saves visualizations as PNG files for detailed precinct analysis.
-
-
-This project utilizes the k-means-constrained Python package developed by Josh Levy:
-@software{Levy-Kramer_k-means-constrained_2018,
-  author = {Levy-Kramer, Josh},
-  month = apr,
-  title = {{k-means-constrained}},
-  url = {https://github.com/joshlk/k-means-constrained},
-  year = {2018}
-}
-
-#### NEW Stuff
-
-Created virtual environment called gerryenv
-
-need to change filepaths, have been changed in:
-- kmeans_constrained_hard_pop_contiguity.py
-  - still does not adhere to perfect contiguity constraints
-  - has issue with ogr - "contains polygon(s) with rings with invalid winding order. Autocorrecting them, but that shapefile should be corrected using ogr2ogr for example.
-  return ogr_read("
-  - needs error messages or some sort of input shape for the files that are chosen 
-
-
-## Project outline moving forward: ##
-- Get data for other states
-- Figure out ogr2ogr issue
-- Reorganize state data into well-named folders
-- delete unnecessary data files/folders
-- run the currently existing code on the other state data
-- Create a frontend with options for
-  - state
-  - data used (which election year)
-  - option to introduce randomness to votes
-- create model to introduce randomness to populations 
-  - allow users to put their own data into the code? could create issues
-- fix models on current data
-  - ensure contiguity 
-  - add compactness score/legality score
-  - add some information about the courts in each state
-  
-
-
+Built as part of an independent computational research and portfolio project focused on algorithmic redistricting and political data systems.
