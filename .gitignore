@@ -1,29 +1,48 @@
-# Python
-__pycache__/
-*.pyc
-*.egg-info/
+# python env
 .venv/
-venv/
-env/
 
-# Data / Generated
-assets/
-outputs/
+# raw GIS data (never commit)
+data/
 *.shp
-*.shx
 *.dbf
+*.shx
 *.prj
 *.cpg
+*.gpkg
+*.geoparquet
+
+# generated packs / runs (local)
+assets/
+outputs/
+
+# frontend generated outputs (keep only latest.json by default)
+apps/web/public/outputs/*
+!apps/web/public/outputs/latest.json
+
+# if you also generate a district outline cache or similar
 *.geojson
 *.topojson
-*.parquet
+# allow curated demo assets if you later want them:
+!apps/web/public/data/*.geojson
+!apps/web/public/runs/**/*
 
-# Local config
+# mac
+.DS_Store
+
+# python
+.venv/
+__pycache__/
+*.pyc
+src/gerry.egg-info/
+
+# next
+apps/web/.next/
+apps/web/node_modules/
+
+# local config
 config.yaml
 
-# Node
-apps/web/node_modules/
-apps/web/.next/
+# generated runs (don’t commit big geojson)
+apps/web/public/runs/
+apps/web/public/outputs/
 
-# macOS
-.DS_Store

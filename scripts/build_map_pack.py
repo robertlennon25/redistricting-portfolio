@@ -5,27 +5,59 @@ from datetime import datetime
 
 import geopandas as gpd
 
-def compute_votes_gcon(gdf):
-    mapping = {
-        '1st': ('GCON01DJAC','GCON01RCAR'),'2nd': ('GCON02DKEL','GCON02RLYN'),
-        '3rd': ('GCON03DRAM','GCON03RBUR'),'4th': ('GCON04DGAR','GCON04RFAL'),
-        '5th': ('GCON05DQUI','GCON05RHAN'),'6th': ('GCON06DCAS','GCON06RPEK'),
-        '7th': ('GCON07DDAV','GCON07OWRI'),'8th': ('GCON08DKRI','GCON08RDAR'),
-        '9th': ('GCON09DSCH','GCON09RRIC'),'10th': ('GCON10DSCH','GCON10RSEV'),
-        '11th': ('GCON11DFOS','GCON11RLAU'),'12th': ('GCON12DMAR','GCON12RBOS'),
-        '13th': ('GCON13DBUD','GCON13RDEE'),'14th': ('GCON14DUND','GCON14RGRY'),
-        '15th': ('GCON15DLAN','GCON15RMIL'),'16th': ('GCON16DHAD','GCON16RLAH'),
-        '17th': ('GCON17DSOR','GCON17RKIN')
-    }
+import re
+
+def compute_votes_dynamic(
+    gdf: gpd.GeoDataFrame,
+    contest_prefix: str = "GCON",   # change if your file uses different contest code
+    dem_party: str = "D",
+    rep_party: str = "R",
+) -> gpd.GeoDataFrame:
+    """
+    Auto-detect and sum vote columns by contest prefix and party letter.
+
+    Expected column shapes:
+      - GCON01Dxxxx, GCON01Rxxxx, ... (case-insensitive)
+
+    If your 2024 file uses a different prefix (e.g., 'CONG', 'USCONG'), pass contest_prefix.
+    """
+    cols = list(gdf.columns)
+
+    # Example: ^GCON\d{2}D  -> all Dem columns for 01..17 districts
+    dem_re = re.compile(rf"^{re.escape(contest_prefix)}\d{{2}}{re.escape(dem_party)}", re.IGNORECASE)
+    rep_re = re.compile(rf"^{re.escape(contest_prefix)}\d{{2}}{re.escape(rep_party)}", re.IGNORECASE)
+
+    dem_cols = [c for c in cols if dem_re.match(c)]
+    rep_cols = [c for c in cols if rep_re.match(c)]
+
+    if not dem_cols or not rep_cols:
+        preview = cols[:120]
+        raise KeyError(
+            f"Could not find vote columns for prefix='{contest_prefix}' with party letters "
+            f"'{dem_party}'/'{rep_party}'.\n"
+            f"Found dem_cols={dem_cols}\nFound rep_cols={rep_cols}\n"
+            f"First columns: {preview}\n\n"
+            "Fix: change contest_prefix in config (e.g., GCON/CONG/USCONG) or adjust regex."
+        )
+
     gdf = gdf.copy()
-    gdf["dem_votes"] = 0
-    gdf["rep_votes"] = 0
-    for dv, rv in mapping.values():
-        gdf["dem_votes"] += gdf[dv].fillna(0).astype(float)
-        gdf["rep_votes"] += gdf[rv].fillna(0).astype(float)
+    gdf["dem_votes"] = 0.0
+    gdf["rep_votes"] = 0.0
+
+    for c in dem_cols:
+        gdf["dem_votes"] += gdf[c].fillna(0).astype(float)
+    for c in rep_cols:
+        gdf["rep_votes"] += gdf[c].fillna(0).astype(float)
+
     gdf["weight"] = (gdf["dem_votes"] + gdf["rep_votes"]).astype(float)
-   # turnout proxy
+
+    # Helpful logging
+    print(f"✅ Vote columns detected for prefix '{contest_prefix}':")
+    print(f"  Dem cols ({len(dem_cols)}): {dem_cols[:8]}{' ...' if len(dem_cols) > 8 else ''}")
+    print(f"  Rep cols ({len(rep_cols)}): {rep_cols[:8]}{' ...' if len(rep_cols) > 8 else ''}")
+
     return gdf
+
 
 def build_adjacency_by_id(gdf: gpd.GeoDataFrame, unit_id_col: str) -> dict[str, list[str]]:
     gdf = gdf[[unit_id_col, "geometry"]].copy()
@@ -60,8 +92,28 @@ def main():
     shp = Path(cfg["data"]["precinct_shapefile_path"])
     unit_id_col = cfg["data"]["unit_id_col"]
     epsg = int(cfg["data"].get("crs_epsg", 3857))
-    out_dir = Path(cfg["output"]["assets_dir"])
+    # --- Resolve assets_dir (support multiple config schemas) ---
+    assets_dir_raw = (
+        cfg.get("paths", {}).get("assets_dir")          # new schema
+        or cfg.get("output", {}).get("assets_dir")      # old schema
+        or cfg.get("assets_dir")                        # legacy flat key
+    )
+    if not assets_dir_raw:
+        raise KeyError(
+            "Config missing assets_dir. Provide one of:\n"
+            "  paths.assets_dir: 'assets/il2024_precincts'\n"
+            "  output.assets_dir: 'assets/il2024_precincts'\n"
+            "  assets_dir: 'assets/il2024_precincts'"
+        )
+
+    out_dir = Path(assets_dir_raw).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # print("OUT_DIR raw:", cfg["output"]["assets_dir"])
+    # print("OUT_DIR resolved:", out_dir.resolve())
+
 
     gdf = gpd.read_file(shp)
     gdf = gdf.to_crs(epsg=epsg)
@@ -74,7 +126,7 @@ def main():
     gdf[unit_id_col] = gdf[unit_id_col].astype(str)
 
     # votes + weight
-    gdf = compute_votes_gcon(gdf)
+    gdf = compute_votes_dynamic(gdf)
 
     # centroids
     centroids = gdf.geometry.centroid

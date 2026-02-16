@@ -1,12 +1,22 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo } from "react";
 import L from "leaflet";
 import { MapContainer, TileLayer, GeoJSON, useMap } from "react-leaflet";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import type { DistrictStat } from "./Sidebar";
 
+type ColorMode = "rainbow" | "party";
+
 function colorForDistrict(d: number) {
   const hue = (d * 47) % 360;
   return `hsl(${hue} 70% 55%)`;
+}
+
+function colorForWinner(w: string | undefined) {
+  if (!w) return "#999999";
+  const ww = String(w).toLowerCase();
+  if (ww.includes("dem")) return "#2b6fff";
+  if (ww.includes("gop") || ww.includes("rep")) return "#ff3b3b";
+  return "#999999";
 }
 
 function fmt(n: any) {
@@ -35,23 +45,55 @@ function FitToGeoJSON({ geojson }: { geojson: FeatureCollection }) {
 
 export default function MapView({
   geojson,
+  districtsGeojson,
   statsByDistrict,
   hoverDistrict,
-  setHoverDistrict
+  setHoverDistrict,
+  colorMode,
+  showDistrictOutlines,
+  outlineWeight
 }: {
   geojson: FeatureCollection;
+  districtsGeojson: FeatureCollection | null;
   statsByDistrict: Map<number, DistrictStat>;
   hoverDistrict: number | null;
   setHoverDistrict: (d: number | null) => void;
+  colorMode: ColorMode;
+  showDistrictOutlines: boolean;
+  outlineWeight: number;
 }) {
   const styleFn = (feature?: Feature<Geometry, any>) => {
     const d = Number(feature?.properties?.district ?? -1);
     const isHover = hoverDistrict !== null && d === hoverDistrict;
+
+    const winner = feature?.properties?.district_winner as string | undefined;
+
+    const fillColor =
+      colorMode === "party"
+        ? colorForWinner(winner)
+        : d >= 0
+          ? colorForDistrict(d)
+          : "#999999";
+
     return {
+      // precinct border styling (subtle)
       color: isHover ? "#000" : "#ffffff",
       weight: isHover ? 1.6 : 0.2,
+      opacity: isHover ? 0.9 : 0.4,
       fillOpacity: 0.65,
-      fillColor: d >= 0 ? colorForDistrict(d) : "#999999"
+      fillColor
+    };
+  };
+
+  const districtOutlineStyle = (feature?: Feature<Geometry, any>) => {
+    const d = Number(feature?.properties?.district ?? -1);
+    const isHover = hoverDistrict !== null && d === hoverDistrict;
+
+    return {
+      color: "#000000",
+      weight: isHover ? outlineWeight + 1.5 : outlineWeight,
+      opacity: isHover ? 0.9 : 0.65,
+      fillOpacity: 0.0
     };
   };
 
@@ -78,7 +120,6 @@ export default function MapView({
     });
   };
 
-  // IMPORTANT: for performance with big GeoJSON, force Canvas renderer
   const canvas = useMemo(() => L.canvas({ padding: 0.5 }), []);
 
   return (
@@ -95,13 +136,24 @@ export default function MapView({
 
       <FitToGeoJSON geojson={geojson} />
 
+      {/* Precinct fill layer */}
       <GeoJSON
-        key={(geojson as any)?.features?.length ?? 0}   // forces refresh if data changes
+        key={`precincts_${(geojson as any)?.features?.length ?? 0}_${colorMode}`}
         data={geojson as any}
         style={styleFn as any}
         onEachFeature={onEachFeature as any}
         renderer={canvas as any}
       />
+
+      {/* District boundary overlay */}
+      {showDistrictOutlines && districtsGeojson ? (
+        <GeoJSON
+          key={`districts_${(districtsGeojson as any)?.features?.length ?? 0}_${outlineWeight}`}
+          data={districtsGeojson as any}
+          style={districtOutlineStyle as any}
+          renderer={canvas as any}
+        />
+      ) : null}
     </MapContainer>
   );
 }
