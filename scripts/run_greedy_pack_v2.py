@@ -191,10 +191,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--maximize", choices=["dem", "rep"], default=None)
+    ap.add_argument("--algo_key", default="greedy_tester_most_rec")
     args = ap.parse_args()
 
     cfg_path = _resolve_config_path(args.config)
     cfg = yaml.safe_load(cfg_path.read_text())
+    algo_key = args.algo_key
 
     pack_dir = _resolve_pack_dir(cfg)
     public_outputs_root = _resolve_public_outputs_root(cfg)
@@ -239,7 +241,7 @@ def main():
     # ----------------------------
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_folder = f"greedy2_{maximize}_{run_id}"
+    run_folder = f"{algo_key}_{maximize}_{run_id}"
     run_dir = public_outputs_root / run_folder
 
     _export_frontend_files(
@@ -247,10 +249,11 @@ def main():
         pack=pack,
         labels=labels,
         run_dir=run_dir,
-        title=f"Greedy V2 ({maximize.upper()})",
+        title=f"Greedy ({algo_key.upper()}) ({maximize.upper()})",
     )
 
-    _update_latest_manifest(public_outputs_root, f"greedy2_{maximize}", run_folder)
+    _update_latest_manifest(public_outputs_root, f"{algo_key}_{maximize}", run_folder)
+
     print("✅ Saved V2 run:", run_dir)
 
 

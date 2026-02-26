@@ -2,6 +2,10 @@ from __future__ import annotations
 from collections import Counter, deque
 import numpy as np
 
+from __future__ import annotations
+from collections import Counter
+import numpy as np
+
 def greedy_packing_labels(
     dem: np.ndarray,
     rep: np.ndarray,
@@ -11,10 +15,6 @@ def greedy_packing_labels(
     pop_tolerance: float,
     maximize: str = "dem",
 ) -> np.ndarray:
-    """
-    Returns labels array of shape (N,) with district ids [0..num_districts-1]
-    """
-
     N = len(weight)
     total_pop = float(weight.sum())
     target = total_pop / num_districts
@@ -25,12 +25,10 @@ def greedy_packing_labels(
     unassigned = set(valid)
     labels = np.full(N, -1, dtype=int)
 
-    # metrics
     def share(votes_arr):
-        # return share per node, guarding weight=0
         s = np.full(N, -np.inf, dtype=float)
         mask = weight > 0
-        s[mask] = votes_arr[mask] / weight[mask]
+        s[mask] = votes_arr[mask] / np.maximum(weight[mask], 1e-9)
         return s
 
     if maximize.lower() == "gop":
@@ -40,18 +38,20 @@ def greedy_packing_labels(
         seed_metric = share(dem)
         frontier_metric = (dem - rep) / np.maximum(weight, 1e-9)
 
+    district_pops = np.zeros(num_districts, dtype=float)
+
+    # ---- Phase 1: build districts with hard max_pop cap ----
     for d in range(num_districts):
         if not unassigned:
             break
 
-        # pick best seed among unassigned
         seed = max(unassigned, key=lambda i: seed_metric[i])
-
         block = {seed}
         pop = float(weight[seed])
         unassigned.remove(seed)
 
-        while pop < min_pop and unassigned:
+        # grow until we reach min_pop or get stuck
+        while pop < min_pop:
             frontier = set()
             for n in block:
                 for nbr in adj[n]:
@@ -61,36 +61,38 @@ def greedy_packing_labels(
             if not frontier:
                 break
 
-            best = max(frontier, key=lambda i: frontier_metric[i])
+            # only consider additions that do not exceed max_pop
+            frontier_ok = [i for i in frontier if pop + float(weight[i]) <= max_pop]
+            if not frontier_ok:
+                break
+
+            best = max(frontier_ok, key=lambda i: frontier_metric[i])
             block.add(best)
             pop += float(weight[best])
             unassigned.remove(best)
 
-            if pop > max_pop:
-                break
-
         for i in block:
             labels[i] = d
+        district_pops[d] = pop
 
-    # assign remaining nodes to neighbor majority district (or smallest)
-    district_pops = Counter()
-    for i in range(N):
-        lab = labels[i]
-        if lab != -1:
-            district_pops[lab] += float(weight[i])
+    # ---- Phase 2: assign remaining nodes with pop-aware choice ----
+    # precompute once for speed
+    for i in list(unassigned):
+        nbr_districts = {labels[n] for n in adj[i] if labels[n] != -1}
 
-    # if some districts never created, initialize them
-    for d in range(num_districts):
-        district_pops.setdefault(d, 0.0)
+        # candidates: neighboring districts preferred, else all districts
+        candidates = list(nbr_districts) if nbr_districts else list(range(num_districts))
 
-    for i in range(N):
-        if labels[i] != -1:
-            continue
-        nbr_labels = [labels[n] for n in adj[i] if labels[n] != -1]
-        if nbr_labels:
-            choice = Counter(nbr_labels).most_common(1)[0][0]
+        # filter those that won't exceed max_pop
+        fit = [d for d in candidates if district_pops[d] + float(weight[i]) <= max_pop]
+
+        if fit:
+            # choose district that ends closest to target
+            choice = min(fit, key=lambda d: abs((district_pops[d] + float(weight[i])) - target))
         else:
-            choice = min(district_pops.keys(), key=lambda d: district_pops[d])
+            # if nothing fits (rare late-stage), put into smallest-pop district
+            choice = int(np.argmin(district_pops))
+
         labels[i] = choice
         district_pops[choice] += float(weight[i])
 
