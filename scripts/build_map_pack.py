@@ -12,6 +12,7 @@ def compute_votes_dynamic(
     contest_prefix: str = "GCON",   # change if your file uses different contest code
     dem_party: str = "D",
     rep_party: str = "R",
+    weight_col: str = "TOTPOP"
 ) -> gpd.GeoDataFrame:
     """
     Auto-detect and sum vote columns by contest prefix and party letter.
@@ -49,7 +50,21 @@ def compute_votes_dynamic(
     for c in rep_cols:
         gdf["rep_votes"] += gdf[c].fillna(0).astype(float)
 
-    gdf["weight"] = (gdf["dem_votes"] + gdf["rep_votes"]).astype(float)
+    # edited 2/26/26 to change to total population from precinct_join_population
+    # ----------------------------
+    # NEW: weight from population
+    # ----------------------------
+    if weight_col not in gdf.columns:
+        # Helpful error with suggestions
+        candidates = [c for c in cols if "POP" in c.upper() or c.upper().startswith("P00")]
+        raise KeyError(
+            f"weight_col='{weight_col}' not found in precinct file.\n"
+            f"Did you run the block→precinct population join and save it into the precinct layer?\n"
+            f"Available columns with likely population signals: {candidates[:50]}\n"
+            f"First columns: {cols[:80]}"
+        )
+
+    gdf["weight"] = gdf[weight_col].fillna(0).astype(float)
 
     # Helpful logging
     print(f"✅ Vote columns detected for prefix '{contest_prefix}':")
@@ -115,7 +130,12 @@ def main():
     # print("OUT_DIR resolved:", out_dir.resolve())
 
 
-    gdf = gpd.read_file(shp)
+    layer = cfg.get("data", {}).get("precinct_layer")
+    if layer:
+        print(f"Reading GPKG layer: {layer}")
+        gdf = gpd.read_file(shp, layer=layer)
+    else:
+        gdf = gpd.read_file(shp)
     gdf = gdf.to_crs(epsg=epsg)
     gdf["geometry"] = gdf["geometry"].buffer(0)
     

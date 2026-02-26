@@ -9,25 +9,17 @@ type ColorMode = "rainbow" | "party";
 /**
  * base is the URL prefix we fetch:
  *  - "/data" (legacy)
- *  - "/runs/<name>" (static named runs)
  *  - "/outputs/<timestamped_folder>" (latest timestamp runs)
  */
 type RunOption = { id: string; label: string; base: string };
 
-const DEFAULT_RUNS: RunOption[] = [
-  { id: "latest_data", label: "Legacy Latest (/data)", base: "/data" },
-
-  // These two will be resolved via /outputs/latest.json (we'll override base dynamically)
-  { id: "greedy_dem_latest", label: "Greedy (Dem maximize) — latest", base: "/outputs/__LATEST_GREEDY_DEM__" },
-  { id: "greedy_rep_latest", label: "Greedy (GOP maximize) — latest", base: "/outputs/__LATEST_GREEDY_REP__" },
-
-  // Optional: still support fixed runs if you keep them
-  { id: "kmeans_softcap", label: "KMeans (soft cap) — fixed", base: "/runs/kmeans_softcap" }
-];
+// Pretty label from key like "greedy2_dem" -> "Greedy2 Dem"
+function prettyRunLabel(key: string) {
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 export default function Home() {
-  const [runId, setRunId] = useState<string>("greedy_dem_latest");
-
+  const [runId, setRunId] = useState<string>("latest_data");
   const [latest, setLatest] = useState<Record<string, string> | null>(null);
 
   const [geojson, setGeojson] = useState<any | null>(null);
@@ -38,8 +30,6 @@ export default function Home() {
   const [colorMode, setColorMode] = useState<ColorMode>("rainbow");
   const [showDistrictOutlines, setShowDistrictOutlines] = useState<boolean>(true);
   const [outlineWeight, setOutlineWeight] = useState<number>(2.5);
-
-  const runs = DEFAULT_RUNS;
 
   // 1) Load /outputs/latest.json once
   useEffect(() => {
@@ -52,32 +42,44 @@ export default function Home() {
       });
   }, []);
 
+  // 2) Build run options dynamically from latest.json
+  const runs: RunOption[] = useMemo(() => {
+    const baseRuns: RunOption[] = [{ id: "latest_data", label: "Legacy Latest (/data)", base: "/data" }];
+
+    if (!latest) return baseRuns;
+
+    const dynamicRuns: RunOption[] = Object.keys(latest)
+      .sort()
+      .map((key) => {
+        const folder = latest[key];
+        return {
+          id: key, // runId equals key in latest.json
+          label: `${prettyRunLabel(key)} — latest`,
+          base: folder ? `/outputs/${folder}` : "/data",
+        };
+      });
+
+    return baseRuns.concat(dynamicRuns);
+  }, [latest]);
+
+  // 3) Keep runId valid when latest.json loads/changes
+  useEffect(() => {
+    if (!latest) return;
+
+    const ids = new Set(runs.map((r) => r.id));
+    if (!ids.has(runId)) {
+      const preferred =
+        (latest["greedy2_dem"] && "greedy2_dem") ||
+        (latest["greedy_dem"] && "greedy_dem") ||
+        "latest_data";
+      setRunId(preferred);
+    }
+  }, [latest, runs, runId]);
+
   const selectedRun = runs.find((r) => r.id === runId) ?? runs[0];
+  const base = selectedRun.base;
 
-  // 2) Resolve the base path, swapping in the timestamped folder names
-  const base = useMemo(() => {
-    const b = selectedRun.base;
-
-    // If we haven't loaded latest.json yet, keep placeholder base (we'll fetch later when latest exists)
-    if (!latest) return b;
-
-    // Latest greedy dem
-    if (b.includes("__LATEST_GREEDY_DEM__")) {
-      const folder = latest["greedy_dem"];
-      return folder ? `/outputs/${folder}` : "/data";
-    }
-
-    // Latest greedy rep
-    if (b.includes("__LATEST_GREEDY_REP__")) {
-      const folder = latest["greedy_rep"];
-      return folder ? `/outputs/${folder}` : "/data";
-    }
-
-    // Fixed base (data or runs)
-    return b;
-  }, [selectedRun.base, latest]);
-
-  // 3) Fetch map + stats + optional outlines whenever base changes or outlines toggle flips
+  // 4) Fetch map + stats + optional outlines whenever base changes or outlines toggle flips
   useEffect(() => {
     let cancelled = false;
 
@@ -89,7 +91,7 @@ export default function Home() {
       try {
         const [gj, st] = await Promise.all([
           fetch(`${base}/map_data.geojson`).then((r) => r.json()),
-          fetch(`${base}/district_stats.json`).then((r) => r.json())
+          fetch(`${base}/district_stats.json`).then((r) => r.json()),
         ]);
         if (cancelled) return;
         setGeojson(gj);
@@ -104,7 +106,6 @@ export default function Home() {
           if (cancelled) return;
           setDistrictsGeojson(dg);
         } catch (e) {
-          // Not fatal if not present
           console.warn("No districts.geojson at base (ok):", base);
         }
       }
