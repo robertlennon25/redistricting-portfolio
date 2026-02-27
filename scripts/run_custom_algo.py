@@ -6,9 +6,14 @@ from datetime import datetime
 import yaml
 import matplotlib.pyplot as plt
 import pandas as pd
-
+'''
+This is a good runner for different algorithms
+At the time, the issue is that they require you to change the run import
+based on which algorithm you want to run. In version 3, we will fix this. 
+'''
 from gerry.data.map_pack import load_map_pack
-from gerry.algos.custom_algo import run as run_algorithm
+# from gerry.algos.custom_algo import run as run_algorithm
+from gerry.algos.pack_sinks_pop_no_con import run as run_algorithm
 
 
 def _repo_root() -> Path:
@@ -163,7 +168,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--maximize", choices=["dem", "rep"], required=True)
-    ap.add_argument("--algo_key", default="custom", help="Key prefix in latest.json, e.g. greedy2, smartA, custom")
+    ap.add_argument("--algo_key", default="", help="Key prefix in latest.json, e.g. greedy2, smartA, custom")
     args = ap.parse_args()
 
     cfg_path = _resolve_config_path(args.config)

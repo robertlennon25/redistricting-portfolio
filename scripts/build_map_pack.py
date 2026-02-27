@@ -74,27 +74,72 @@ def compute_votes_dynamic(
     return gdf
 
 
-def build_adjacency_by_id(gdf: gpd.GeoDataFrame, unit_id_col: str) -> dict[str, list[str]]:
+def build_adjacency_by_id(
+    gdf: gpd.GeoDataFrame,
+    unit_id_col: str,
+    eps: float = 1.0,          # meters if you're in EPSG:3857
+    use_boundary: bool = True, # boundary-buffer adjacency is usually safest
+) -> dict[str, list[str]]:
+    """
+    Build adjacency using a tolerant geometric test.
+
+    - If use_boundary=True: neighbors if buffered boundaries intersect (robust for tiny gaps).
+    - If use_boundary=False: neighbors if buffered polygons intersect (more permissive).
+
+    eps is in the units of the GeoDataFrame CRS (EPSG:3857 => meters).
+    """
     gdf = gdf[[unit_id_col, "geometry"]].copy()
     gdf[unit_id_col] = gdf[unit_id_col].astype(str)
     gdf = gdf.reset_index(drop=True)
 
-    sindex = gdf.sindex
-    neighbors = {uid: [] for uid in gdf[unit_id_col].tolist()}
+    # Defensive geometry fix (buffer(0) already done upstream, but keep it safe)
+    gdf["geometry"] = gdf["geometry"].buffer(0)
 
-    for i, geom in enumerate(gdf.geometry):
+    sindex = gdf.sindex
+    ids = gdf[unit_id_col].tolist()
+    geoms = gdf.geometry.values  # array-like of shapely geometries
+
+    neighbors: dict[str, set[str]] = {uid: set() for uid in ids}
+
+    for i, geom_i in enumerate(geoms):
         if i % 500 == 0:
-            print(f"Adjacency: {i}/{len(gdf)}")
-        uid_i = gdf.at[i, unit_id_col]
-        for j in sindex.intersection(geom.bounds):
+            print(f"Adjacency: {i}/{len(geoms)}")
+
+        if geom_i is None or geom_i.is_empty:
+            continue
+
+        uid_i = ids[i]
+
+        # Candidate neighbors by bbox
+        cand_idx = list(sindex.intersection(geom_i.bounds))
+        for j in cand_idx:
+            j = int(j)
             if i >= j:
                 continue
-            if geom.touches(gdf.geometry[j]):
-                uid_j = gdf.at[j, unit_id_col]
-                neighbors[uid_i].append(uid_j)
-                neighbors[uid_j].append(uid_i)
 
-    return {k: sorted(set(v)) for k, v in neighbors.items()}
+            geom_j = geoms[j]
+            if geom_j is None or geom_j.is_empty:
+                continue
+
+            # Tolerant adjacency check
+            try:
+                if use_boundary:
+                    # boundary-buffer intersection is good for "should-touch" polygons with tiny gaps
+                    ok = geom_i.boundary.buffer(eps).intersects(geom_j.boundary.buffer(eps))
+                else:
+                    # more permissive: any buffered intersection
+                    ok = geom_i.buffer(eps).intersects(geom_j.buffer(eps))
+            except Exception:
+                # If something odd happens with geometry ops, skip this pair
+                ok = False
+
+            if ok:
+                uid_j = ids[j]
+                neighbors[uid_i].add(uid_j)
+                neighbors[uid_j].add(uid_i)
+
+    # Convert sets to sorted lists
+    return {k: sorted(v) for k, v in neighbors.items()}
 
 
 def main():
