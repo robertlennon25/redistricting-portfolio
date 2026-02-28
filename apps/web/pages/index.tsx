@@ -7,69 +7,96 @@ const MapView = dynamic(() => import("../components/MapView"), { ssr: false });
 type ColorMode = "rainbow" | "party";
 
 /**
- * base is the URL prefix we fetch:
- *  - "/data" (legacy)
- *  - "/outputs/<timestamped_folder>" (latest timestamp runs)
+ * Run option: base is the URL prefix we fetch.
+ * Examples:
+ * - "/data" (legacy)
+ * - "/outputs/ny/kmeans_softcap_20260227_153000"
  */
 type RunOption = { id: string; label: string; base: string };
 
-// Pretty label from key like "greedy2_dem" -> "Greedy2 Dem"
 function prettyRunLabel(key: string) {
   return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export default function Home() {
-  const [runId, setRunId] = useState<string>("latest_data");
+  // ----- NEW: state selection -----
+  const [states, setStates] = useState<string[] | null>(null);
+  const [stateKey, setStateKey] = useState<string | null>(null);
+
+  // ----- existing: run + map state -----
+  const [runId, setRunId] = useState("latest_data");
   const [latest, setLatest] = useState<Record<string, string> | null>(null);
 
-  const [geojson, setGeojson] = useState<any | null>(null);
-  const [districtsGeojson, setDistrictsGeojson] = useState<any | null>(null);
+  const [geojson, setGeojson] = useState<any>(null);
+  const [districtsGeojson, setDistrictsGeojson] = useState<any>(null);
   const [stats, setStats] = useState<DistrictStat[] | null>(null);
+
   const [hoverDistrict, setHoverDistrict] = useState<number | null>(null);
-
   const [colorMode, setColorMode] = useState<ColorMode>("rainbow");
-  const [showDistrictOutlines, setShowDistrictOutlines] = useState<boolean>(true);
-  const [outlineWeight, setOutlineWeight] = useState<number>(2.5);
 
-  // 1) Load /outputs/latest.json once
+  const [showDistrictOutlines, setShowDistrictOutlines] = useState(true);
+  const [outlineWeight, setOutlineWeight] = useState(2.5);
+
+  // 0) Load list of states (outputs/states.json)
   useEffect(() => {
-    fetch("/outputs/latest.json")
+    fetch("/outputs/states.json")
       .then((r) => r.json())
-      .then((j) => setLatest(j))
-      .catch((e) => {
-        console.warn("No /outputs/latest.json yet (run python scripts first). Falling back to /data.", e);
-        setLatest({});
+      .then((j) => {
+        if (Array.isArray(j)) setStates(j.map(String));
+        else setStates(["il"]);
+      })
+      .catch(() => {
+        // fallback if file not present yet
+        setStates(["il"]);
       });
   }, []);
 
-  // 2) Build run options dynamically from latest.json
-  const runs: RunOption[] = useMemo(() => {
-    const baseRuns: RunOption[] = [{ id: "latest_data", label: "Legacy Latest (/data)", base: "/data" }];
+  // 1) When a state is selected, load its manifest: /outputs/<state>/latest.json
+  useEffect(() => {
+    if (!stateKey) return;
 
-    if (!latest) return baseRuns;
+    setLatest(null);
+    setRunId("latest_data");
+
+    fetch(`/outputs/${stateKey}/latest.json`)
+      .then((r) => r.json())
+      .then((j) => setLatest(j))
+      .catch((e) => {
+        console.warn(`No /outputs/${stateKey}/latest.json yet.`, e);
+        setLatest({});
+      });
+  }, [stateKey]);
+
+  // 2) Build run options from latest.json (state-scoped)
+  const runs: RunOption[] = useMemo(() => {
+    const baseRuns: RunOption[] = [
+      { id: "latest_data", label: "Legacy Latest (/data)", base: "/data" },
+    ];
+    if (!latest || !stateKey) return baseRuns;
 
     const dynamicRuns: RunOption[] = Object.keys(latest)
       .sort()
       .map((key) => {
-        const folder = latest[key];
+        const folder = latest[key]; // e.g. "kmeans_softcap_20260227_153000"
         return {
-          id: key, // runId equals key in latest.json
+          id: key,
           label: `${prettyRunLabel(key)} — latest`,
-          base: folder ? `/outputs/${folder}` : "/data",
+          base: folder ? `/outputs/${stateKey}/${folder}` : "/data",
         };
       });
 
     return baseRuns.concat(dynamicRuns);
-  }, [latest]);
+  }, [latest, stateKey]);
 
-  // 3) Keep runId valid when latest.json loads/changes
+  // 3) Keep runId valid when manifest loads/changes
   useEffect(() => {
     if (!latest) return;
-
     const ids = new Set(runs.map((r) => r.id));
     if (!ids.has(runId)) {
+      // pick a reasonable default if exists, else legacy
       const preferred =
-        (latest["greedy2_dem"] && "greedy2_dem") ||
+        (latest["kmeans_softcap"] && "kmeans_softcap") ||
+        (latest["k_means_new"] && "k_means_new") ||
         (latest["greedy_dem"] && "greedy_dem") ||
         "latest_data";
       setRunId(preferred);
@@ -79,8 +106,10 @@ export default function Home() {
   const selectedRun = runs.find((r) => r.id === runId) ?? runs[0];
   const base = selectedRun.base;
 
-  // 4) Fetch map + stats + optional outlines whenever base changes or outlines toggle flips
+  // 4) Fetch map + stats + optional outlines whenever base changes (after state chosen)
   useEffect(() => {
+    if (!stateKey) return; // don’t fetch anything until state is chosen
+
     let cancelled = false;
 
     (async () => {
@@ -114,33 +143,99 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [base, showDistrictOutlines]);
+  }, [base, showDistrictOutlines, stateKey]);
 
   const statsByDistrict = useMemo(() => {
     const m = new Map<number, DistrictStat>();
-    (stats ?? []).forEach((s) => m.set(Number((s as any).district), s));
+    (stats ?? []).forEach((s: any) => m.set(Number(s.district), s));
     return m;
   }, [stats]);
 
+  // ----- NEW: "Back to state select" -----
+  function resetToStateSelect() {
+    setStateKey(null);
+    setLatest(null);
+    setRunId("latest_data");
+    setGeojson(null);
+    setDistrictsGeojson(null);
+    setStats(null);
+    setHoverDistrict(null);
+  }
+
+  // =========================
+  // UI: state selection screen
+  // =========================
+  if (!stateKey) {
+    return (
+      <div style={{ padding: 24, maxWidth: 920, margin: "0 auto" }}>
+        <h2 style={{ marginBottom: 6 }}>Gerrymandering Demo</h2>
+        <p style={{ marginTop: 0, opacity: 0.8 }}>
+          Choose a state to load its precomputed runs.
+        </p>
+
+        {!states ? (
+          <div style={{ padding: 12 }}>Loading states…</div>
+        ) : (
+          <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
+            {states.map((st) => (
+              <button
+                key={st}
+                onClick={() => setStateKey(st)}
+                style={{
+                  padding: 16,
+                  borderRadius: 12,
+                  border: "1px solid rgba(0,0,0,0.12)",
+                  background: "white",
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                <div style={{ fontWeight: 700, fontSize: 18 }}>{st.toUpperCase()}</div>
+                <div style={{ opacity: 0.7, marginTop: 4 }}>View runs</div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // =========================
+  // UI: main app after state chosen
+  // =========================
   return (
-    <div className="appShell">
-      <div className="sidebar">
-        <div className="headerRow">
-          <h2 style={{ margin: 0 }}>Illinois Gerrymandering Demo</h2>
-          <span className="badge">Runs</span>
+    <div style={{ display: "flex", height: "100vh", width: "100%" }}>
+      {/* Sidebar */}
+      <div style={{ width: 380, borderRight: "1px solid #eee", padding: 16, overflowY: "auto" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            onClick={resetToStateSelect}
+            style={{
+              padding: "8px 10px",
+              borderRadius: 10,
+              border: "1px solid rgba(0,0,0,0.12)",
+              background: "white",
+              cursor: "pointer",
+            }}
+          >
+            ← States
+          </button>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800 }}>{stateKey.toUpperCase()}</div>
+            <div style={{ opacity: 0.7, fontSize: 12 }}>Pick a run and explore</div>
+          </div>
         </div>
 
-        <div className="small" style={{ marginTop: 8 }}>
-          Hover precincts to see precinct + district totals. Sidebar highlights hovered district.
-        </div>
+        <hr style={{ margin: "14px 0" }} />
 
         {/* Controls */}
-        <div style={{ marginTop: 14, padding: 10, border: "1px solid #2a2a2a", borderRadius: 10 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>Run</div>
+        <div style={{ display: "grid", gap: 12 }}>
+          <label style={{ fontWeight: 700 }}>Run</label>
           <select
             value={runId}
             onChange={(e) => setRunId(e.target.value)}
             style={{ width: "100%", padding: 8, borderRadius: 8 }}
+            disabled={!latest}
           >
             {runs.map((r) => (
               <option key={r.id} value={r.id}>
@@ -149,29 +244,24 @@ export default function Home() {
             ))}
           </select>
 
-          <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-            <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <input
                 type="radio"
-                name="colormode"
+                name="colorMode"
                 checked={colorMode === "rainbow"}
                 onChange={() => setColorMode("rainbow")}
               />
               Rainbow districts
             </label>
 
-            <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12 }}>
-              <input
-                type="radio"
-                name="colormode"
-                checked={colorMode === "party"}
-                onChange={() => setColorMode("party")}
-              />
+            <label style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input type="radio" name="colorMode" checked={colorMode === "party"} onChange={() => setColorMode("party")} />
               Red/Blue winners
             </label>
           </div>
 
-          <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, marginTop: 10 }}>
+          <label style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <input
               type="checkbox"
               checked={showDistrictOutlines}
@@ -181,13 +271,13 @@ export default function Home() {
           </label>
 
           {showDistrictOutlines ? (
-            <div style={{ marginTop: 8 }}>
-              <div style={{ fontSize: 12, marginBottom: 4 }}>Outline thickness</div>
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>Outline thickness</div>
               <input
                 type="range"
-                min={1}
-                max={6}
-                step={0.5}
+                min={0.5}
+                max={8}
+                step={0.1}
                 value={outlineWeight}
                 onChange={(e) => setOutlineWeight(Number(e.target.value))}
                 style={{ width: "100%" }}
@@ -195,20 +285,25 @@ export default function Home() {
             </div>
           ) : null}
 
-          <div className="small" style={{ marginTop: 8 }}>
+          <div style={{ fontSize: 12, opacity: 0.8 }}>
             Fetching from: <code>{base}</code>
           </div>
         </div>
 
-        <div style={{ marginTop: 12 }}>
-          <Sidebar stats={stats ?? []} activeDistrict={hoverDistrict} onHoverDistrict={setHoverDistrict} />
-        </div>
+        <hr style={{ margin: "14px 0" }} />
+
+        <Sidebar
+          stats={(stats ?? []) as any}
+          activeDistrict={hoverDistrict}
+          onHoverDistrict={setHoverDistrict}
+        />
       </div>
 
-      <div className="main">
-        {!geojson || !stats ? <div className="mapLoading">Loading map data…</div> : null}
-
-        {geojson && stats ? (
+      {/* Map */}
+      <div style={{ flex: 1 }}>
+        {!geojson || !stats ? (
+          <div style={{ padding: 20 }}>Loading map data…</div>
+        ) : (
           <MapView
             geojson={geojson}
             districtsGeojson={districtsGeojson}
@@ -219,7 +314,7 @@ export default function Home() {
             showDistrictOutlines={showDistrictOutlines}
             outlineWeight={outlineWeight}
           />
-        ) : null}
+        )}
       </div>
     </div>
   );

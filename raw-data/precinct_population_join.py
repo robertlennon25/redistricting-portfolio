@@ -1,72 +1,107 @@
+from __future__ import annotations
+
+import argparse
 from pathlib import Path
+
 import geopandas as gpd
 import pandas as pd
-"""
-Run this code to join the population file (Census 2020, PL4171)
- to the voting district voting results from 2024 congresisonal elections
- 
- This is a temporary fix to join them for Illinois, will be refactored to autoimatically 
- run when we add new states 
+import yaml
 
- """
-
-PRECINCT_SHP = Path("/Users/robertlennon/Desktop/redistricting/raw-data/il_2024_gen_prec/il_2024_gen_cong_prec/il_2024_gen_cong_prec.shp")
-BLOCKS_SHP   = Path("/Users/robertlennon/Desktop/redistricting/raw-data/il_pl2020_b (1)/il_pl2020_b.shp")  # adjust if needed
-OUT_PATH     = Path("/Users/robertlennon/Desktop/redistricting/raw-data/il_2024_gen_prec/il_2024_gen_cong_prec/il_2024_gen_cong_prec_with_pop.gpkg")
-
-POP_COL = "P0010001"   # total population (use P0030001 for VAP)
-PRECINCT_ID_COL = "UNIQUE_ID"
 
 def main():
-    print("Loading precincts:", PRECINCT_SHP)
-    precincts = gpd.read_file(PRECINCT_SHP)
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default="config.yaml")
+    ap.add_argument("--state", required=True, help="State key in config.yaml under states: (e.g., il, wi)")
+    ap.add_argument(
+        "--method",
+        choices=["centroid_within", "intersects"],
+        default="centroid_within",
+        help="centroid_within is fast; intersects is more robust but may overcount without area-weighting.",
+    )
+    args = ap.parse_args()
 
-    print("Loading blocks:", BLOCKS_SHP)
-    blocks = gpd.read_file(BLOCKS_SHP)
+    cfg = yaml.safe_load(open(args.config, "r"))
+    states = cfg.get("states", {}) or {}
+    if args.state not in states:
+        raise KeyError(f"State '{args.state}' not found under config['states'].")
 
-    if POP_COL not in blocks.columns:
-        raise ValueError(f"{POP_COL} not found in blocks. Available: {list(blocks.columns)[:50]} ...")
+    scfg = states[args.state]
 
-    # Ensure numeric
-    blocks[POP_COL] = pd.to_numeric(blocks[POP_COL], errors="coerce").fillna(0).astype(float)
+    precinct_path = Path(scfg["precinct_path"]).expanduser()
+    blocks_path = Path(scfg["blocks_path"]).expanduser()
+    out_gpkg = Path(scfg["out_gpkg"]).expanduser()
+    out_layer = scfg.get("out_layer")
+    if not out_layer:
+        raise KeyError(f"states.{args.state}.out_layer is required (you said you want layers).")
 
-    # Align CRS (project both to a planar CRS for spatial ops)
-    # If precincts CRS missing, you need to set it (rare with RDH, but possible)
+    pop_col = scfg.get("pop_col", "P0010001")
+    precinct_id_col = scfg.get("precinct_id_col", "UNIQUE_ID")
+    target_epsg = int(scfg.get("target_epsg", 3857))
+
+    print(f"[{args.state}] Loading precincts: {precinct_path}")
+    precincts = gpd.read_file(precinct_path)
+
+    print(f"[{args.state}] Loading blocks: {blocks_path}")
+    blocks = gpd.read_file(blocks_path)
+
+    if pop_col not in blocks.columns:
+        raise ValueError(f"[{args.state}] pop_col '{pop_col}' not found in blocks. Columns: {list(blocks.columns)[:80]}")
+    if precinct_id_col not in precincts.columns:
+        raise ValueError(f"[{args.state}] precinct_id_col '{precinct_id_col}' not found in precincts. Columns: {list(precincts.columns)[:80]}")
+
+    blocks[pop_col] = pd.to_numeric(blocks[pop_col], errors="coerce").fillna(0).astype(float)
+    precincts[precinct_id_col] = precincts[precinct_id_col].astype(str)
+
     if precincts.crs is None:
-        raise ValueError("Precincts CRS is None. Set it before joining (check .prj file).")
+        raise ValueError(f"[{args.state}] Precinct CRS is None. Check the source file (.prj).")
     if blocks.crs is None:
-        raise ValueError("Blocks CRS is None. Set it before joining (check .prj file).")
+        raise ValueError(f"[{args.state}] Blocks CRS is None. Check the source file (.prj).")
 
-    # Use the precinct CRS
-    blocks = blocks.to_crs(precincts.crs)
+    # Project both to planar CRS for stable spatial operations
+    precincts = precincts.to_crs(epsg=target_epsg)
+    blocks = blocks.to_crs(epsg=target_epsg)
 
-    # Centroid join is much faster than polygon intersects and usually good enough for block->precinct
-    # (blocks are small; centroid almost always falls inside the correct precinct)
-    blocks_cent = blocks.copy()
-    blocks_cent["geometry"] = blocks_cent.geometry.centroid
+    # Clean geometries
+    precincts["geometry"] = precincts.geometry.buffer(0)
+    blocks["geometry"] = blocks.geometry.buffer(0)
 
-    print("Spatial join (centroid within precinct)...")
-    joined = gpd.sjoin(
-        blocks_cent[[POP_COL, "geometry"]],
-        precincts[[PRECINCT_ID_COL, "geometry"]],
-        how="inner",
-        predicate="within",
+    if args.method == "centroid_within":
+        blocks_use = blocks[[pop_col, "geometry"]].copy()
+        blocks_use["geometry"] = blocks_use.geometry.centroid
+        print(f"[{args.state}] Spatial join: block CENTROIDS within precincts ...")
+        joined = gpd.sjoin(
+            blocks_use,
+            precincts[[precinct_id_col, "geometry"]],
+            how="inner",
+            predicate="within",
+        )
+    else:
+        print(f"[{args.state}] Spatial join: blocks intersect precincts ...")
+        joined = gpd.sjoin(
+            blocks[[pop_col, "geometry"]],
+            precincts[[precinct_id_col, "geometry"]],
+            how="inner",
+            predicate="intersects",
+        )
+
+    print(f"[{args.state}] Aggregating {pop_col} -> TOTPOP by precinct...")
+    pop_by_precinct = (
+        joined.groupby(precinct_id_col)[pop_col].sum().reset_index().rename(columns={pop_col: "TOTPOP"})
     )
 
-    print("Aggregating population by precinct...")
-    pop_by_precinct = joined.groupby(PRECINCT_ID_COL)[POP_COL].sum().reset_index()
-    pop_by_precinct = pop_by_precinct.rename(columns={POP_COL: "TOTPOP"})
-
-    print("Merging back onto precincts...")
-    out = precincts.merge(pop_by_precinct, on=PRECINCT_ID_COL, how="left")
+    print(f"[{args.state}] Merging back onto precincts...")
+    out = precincts.merge(pop_by_precinct, on=precinct_id_col, how="left")
     out["TOTPOP"] = out["TOTPOP"].fillna(0).astype(float)
 
-    print("Writing:", OUT_PATH)
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    out.to_file(OUT_PATH, driver="GPKG")
+    print(f"[{args.state}] Writing GPKG: {out_gpkg} | layer='{out_layer}'")
+    out_gpkg.parent.mkdir(parents=True, exist_ok=True)
 
-    print("Done. TOTPOP stats:")
+    # IMPORTANT: write to a specific layer name
+    out.to_file(out_gpkg, layer=out_layer, driver="GPKG")
+
+    print(f"[{args.state}] Done. TOTPOP describe():")
     print(out["TOTPOP"].describe())
+
 
 if __name__ == "__main__":
     main()

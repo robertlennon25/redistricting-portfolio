@@ -1,35 +1,57 @@
 from __future__ import annotations
+
+import argparse
 import json
-from pathlib import Path
+import re
 from datetime import datetime
+from pathlib import Path
 
 import geopandas as gpd
 
-import re
 
 def compute_votes_dynamic(
     gdf: gpd.GeoDataFrame,
-    contest_prefix: str = "GCON",   # change if your file uses different contest code
+    contest_prefix: str = "GCON",
     dem_party: str = "D",
     rep_party: str = "R",
-    weight_col: str = "TOTPOP"
+    weight_col: str = "TOTPOP",
 ) -> gpd.GeoDataFrame:
     """
-    Auto-detect and sum vote columns by contest prefix and party letter.
+    Supports two common schemas:
 
-    Expected column shapes:
-      - GCON01Dxxxx, GCON01Rxxxx, ... (case-insensitive)
+    (A) IL-style with district numbers:
+        GCON01D..., GCON01R..., GCON02D..., ...
 
-    If your 2024 file uses a different prefix (e.g., 'CONG', 'USCONG'), pass contest_prefix.
+    (B) Single contest code + trailing party letter:
+        G24COND, G24CONR, (optionally G24CONO), etc.
     """
     cols = list(gdf.columns)
 
-    # Example: ^GCON\d{2}D  -> all Dem columns for 01..17 districts
-    dem_re = re.compile(rf"^{re.escape(contest_prefix)}\d{{2}}{re.escape(dem_party)}", re.IGNORECASE)
-    rep_re = re.compile(rf"^{re.escape(contest_prefix)}\d{{2}}{re.escape(rep_party)}", re.IGNORECASE)
+    # ---- Try schema A: prefix + 2 digits + party ----
+    dem_re_A = re.compile(rf"^{re.escape(contest_prefix)}\d{{2}}{re.escape(dem_party)}", re.IGNORECASE)
+    rep_re_A = re.compile(rf"^{re.escape(contest_prefix)}\d{{2}}{re.escape(rep_party)}", re.IGNORECASE)
 
-    dem_cols = [c for c in cols if dem_re.match(c)]
-    rep_cols = [c for c in cols if rep_re.match(c)]
+    dem_cols = [c for c in cols if dem_re_A.match(c)]
+    rep_cols = [c for c in cols if rep_re_A.match(c)]
+
+    # ---- If none found, try schema B: exact contest column names ----
+    if not dem_cols or not rep_cols:
+        # Most common: exact names like "G24COND" and "G24CONR"
+        dem_exact = [c for c in cols if c.upper() == f"{contest_prefix}{dem_party}".upper()]
+        rep_exact = [c for c in cols if c.upper() == f"{contest_prefix}{rep_party}".upper()]
+
+        # Slightly more flexible fallback: startswith contest_prefix and endswith party letter
+        if not dem_exact:
+            dem_re_B = re.compile(rf"^{re.escape(contest_prefix)}.*{re.escape(dem_party)}$", re.IGNORECASE)
+            dem_exact = [c for c in cols if dem_re_B.match(c)]
+        if not rep_exact:
+            rep_re_B = re.compile(rf"^{re.escape(contest_prefix)}.*{re.escape(rep_party)}$", re.IGNORECASE)
+            rep_exact = [c for c in cols if rep_re_B.match(c)]
+
+        # If we found B-style columns, use them
+        if dem_exact and rep_exact:
+            dem_cols = dem_exact
+            rep_cols = rep_exact
 
     if not dem_cols or not rep_cols:
         preview = cols[:120]
@@ -38,7 +60,9 @@ def compute_votes_dynamic(
             f"'{dem_party}'/'{rep_party}'.\n"
             f"Found dem_cols={dem_cols}\nFound rep_cols={rep_cols}\n"
             f"First columns: {preview}\n\n"
-            "Fix: change contest_prefix in config (e.g., GCON/CONG/USCONG) or adjust regex."
+            "Fix options:\n"
+            "  1) Set votes.contest_prefix correctly for this state (e.g., 'G24CON').\n"
+            "  2) Or adjust compute_votes_dynamic() patterns if your dataset uses a different schema."
         )
 
     gdf = gdf.copy()
@@ -50,12 +74,8 @@ def compute_votes_dynamic(
     for c in rep_cols:
         gdf["rep_votes"] += gdf[c].fillna(0).astype(float)
 
-    # edited 2/26/26 to change to total population from precinct_join_population
-    # ----------------------------
-    # NEW: weight from population
-    # ----------------------------
+    # Weight from population
     if weight_col not in gdf.columns:
-        # Helpful error with suggestions
         candidates = [c for c in cols if "POP" in c.upper() or c.upper().startswith("P00")]
         raise KeyError(
             f"weight_col='{weight_col}' not found in precinct file.\n"
@@ -66,10 +86,9 @@ def compute_votes_dynamic(
 
     gdf["weight"] = gdf[weight_col].fillna(0).astype(float)
 
-    # Helpful logging
-    print(f"✅ Vote columns detected for prefix '{contest_prefix}':")
-    print(f"  Dem cols ({len(dem_cols)}): {dem_cols[:8]}{' ...' if len(dem_cols) > 8 else ''}")
-    print(f"  Rep cols ({len(rep_cols)}): {rep_cols[:8]}{' ...' if len(rep_cols) > 8 else ''}")
+    print(f"✅ Vote columns detected using contest_prefix='{contest_prefix}':")
+    print(f"  Dem cols ({len(dem_cols)}): {dem_cols}")
+    print(f"  Rep cols ({len(rep_cols)}): {rep_cols}")
 
     return gdf
 
@@ -77,27 +96,21 @@ def compute_votes_dynamic(
 def build_adjacency_by_id(
     gdf: gpd.GeoDataFrame,
     unit_id_col: str,
-    eps: float = 1.0,          # meters if you're in EPSG:3857
-    use_boundary: bool = True, # boundary-buffer adjacency is usually safest
+    eps: float = 1.0,
+    use_boundary: bool = True,
 ) -> dict[str, list[str]]:
     """
     Build adjacency using a tolerant geometric test.
-
-    - If use_boundary=True: neighbors if buffered boundaries intersect (robust for tiny gaps).
-    - If use_boundary=False: neighbors if buffered polygons intersect (more permissive).
-
-    eps is in the units of the GeoDataFrame CRS (EPSG:3857 => meters).
     """
     gdf = gdf[[unit_id_col, "geometry"]].copy()
     gdf[unit_id_col] = gdf[unit_id_col].astype(str)
     gdf = gdf.reset_index(drop=True)
 
-    # Defensive geometry fix (buffer(0) already done upstream, but keep it safe)
     gdf["geometry"] = gdf["geometry"].buffer(0)
 
     sindex = gdf.sindex
     ids = gdf[unit_id_col].tolist()
-    geoms = gdf.geometry.values  # array-like of shapely geometries
+    geoms = gdf.geometry.values
 
     neighbors: dict[str, set[str]] = {uid: set() for uid in ids}
 
@@ -109,9 +122,8 @@ def build_adjacency_by_id(
             continue
 
         uid_i = ids[i]
-
-        # Candidate neighbors by bbox
         cand_idx = list(sindex.intersection(geom_i.bounds))
+
         for j in cand_idx:
             j = int(j)
             if i >= j:
@@ -121,16 +133,12 @@ def build_adjacency_by_id(
             if geom_j is None or geom_j.is_empty:
                 continue
 
-            # Tolerant adjacency check
             try:
                 if use_boundary:
-                    # boundary-buffer intersection is good for "should-touch" polygons with tiny gaps
                     ok = geom_i.boundary.buffer(eps).intersects(geom_j.boundary.buffer(eps))
                 else:
-                    # more permissive: any buffered intersection
                     ok = geom_i.buffer(eps).intersects(geom_j.buffer(eps))
             except Exception:
-                # If something odd happens with geometry ops, skip this pair
                 ok = False
 
             if ok:
@@ -138,25 +146,75 @@ def build_adjacency_by_id(
                 neighbors[uid_i].add(uid_j)
                 neighbors[uid_j].add(uid_i)
 
-    # Convert sets to sorted lists
     return {k: sorted(v) for k, v in neighbors.items()}
 
 
+def _apply_state_override(cfg: dict, state: str) -> dict:
+    """
+    If cfg has a states.<state> entry, override data/paths for this run.
+    Does NOT write back to config.yaml; only modifies the in-memory cfg.
+    """
+    scfg = (cfg.get("states", {}) or {}).get(state)
+    if not scfg:
+        raise KeyError(f"State '{state}' not found under cfg['states'].")
+
+    cfg = dict(cfg)  # shallow copy
+    cfg.setdefault("data", {})
+    cfg.setdefault("paths", {})
+
+    # precinct input should be the "with_pop" output of your join script
+    cfg["data"]["precinct_shapefile_path"] = scfg["out_gpkg"]
+    if scfg.get("out_layer"):
+        cfg["data"]["precinct_layer"] = scfg["out_layer"]
+
+    cfg["data"]["unit_id_col"] = scfg.get("precinct_id_col", cfg["data"].get("unit_id_col", "UNIQUE_ID"))
+    cfg["data"]["crs_epsg"] = int(scfg.get("target_epsg", cfg["data"].get("crs_epsg", 3857)))
+    cfg["data"]["weight_col"] = scfg.get("weight_col", "TOTPOP")
+
+    # where to write the pack
+    if scfg.get("assets_dir"):
+        cfg["paths"]["assets_dir"] = scfg["assets_dir"]
+
+    # vote prefix / party letters can also be overridden per state if you want
+    if scfg.get("contest_prefix"):
+        cfg.setdefault("votes", {})
+        cfg["votes"]["contest_prefix"] = scfg["contest_prefix"]
+
+    return cfg
+
+
 def main():
-    import yaml, argparse
+    import yaml
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="config.yaml")
+    ap.add_argument("--state", default=None, help="Override to build map pack for a configured state key")
     args = ap.parse_args()
+
     cfg = yaml.safe_load(open(args.config, "r"))
 
-    shp = Path(cfg["data"]["precinct_shapefile_path"])
+    # optional override (does not modify config.yaml)
+    if args.state:
+        cfg = _apply_state_override(cfg, args.state)
+        print(f"✅ build_map_pack using state='{args.state}'")
+
+    # Read config fields (either from base config or overridden)
+    shp = Path(cfg["data"]["precinct_shapefile_path"]).expanduser()
     unit_id_col = cfg["data"]["unit_id_col"]
     epsg = int(cfg["data"].get("crs_epsg", 3857))
-    # --- Resolve assets_dir (support multiple config schemas) ---
+    weight_col = cfg["data"].get("weight_col", "TOTPOP")
+
+    # votes config
+    votes_cfg = cfg.get("votes", {}) or {}
+    contest_prefix = votes_cfg.get("contest_prefix", cfg.get("data", {}).get("contest_prefix", "GCON"))
+    dem_party = votes_cfg.get("dem_party_letter", "D")
+    rep_party = votes_cfg.get("rep_party_letter", "R")
+
+    # Resolve assets_dir (support multiple config schemas)
     assets_dir_raw = (
-        cfg.get("paths", {}).get("assets_dir")          # new schema
-        or cfg.get("output", {}).get("assets_dir")      # old schema
-        or cfg.get("assets_dir")                        # legacy flat key
+        cfg.get("paths", {}).get("assets_dir")
+        or cfg.get("output", {}).get("assets_dir")
+        or cfg.get("assets_dir")
     )
     if not assets_dir_raw:
         raise KeyError(
@@ -169,29 +227,32 @@ def main():
     out_dir = Path(assets_dir_raw).expanduser()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # print("OUT_DIR raw:", cfg["output"]["assets_dir"])
-    # print("OUT_DIR resolved:", out_dir.resolve())
-
-
+    # Read precinct layer if provided (GPKG)
     layer = cfg.get("data", {}).get("precinct_layer")
     if layer:
         print(f"Reading GPKG layer: {layer}")
         gdf = gpd.read_file(shp, layer=layer)
     else:
         gdf = gpd.read_file(shp)
+
     gdf = gdf.to_crs(epsg=epsg)
     gdf["geometry"] = gdf["geometry"].buffer(0)
-    
 
     if unit_id_col not in gdf.columns:
-        raise ValueError(f"unit_id_col='{unit_id_col}' not found. Available columns: {list(gdf.columns)[:50]} ...")
+        raise ValueError(
+            f"unit_id_col='{unit_id_col}' not found. Available columns: {list(gdf.columns)[:50]} ..."
+        )
 
     gdf[unit_id_col] = gdf[unit_id_col].astype(str)
 
     # votes + weight
-    gdf = compute_votes_dynamic(gdf)
+    gdf = compute_votes_dynamic(
+        gdf,
+        contest_prefix=contest_prefix,
+        dem_party=dem_party,
+        rep_party=rep_party,
+        weight_col=weight_col,
+    )
 
     # centroids
     centroids = gdf.geometry.centroid
@@ -211,7 +272,9 @@ def main():
     shapes.to_file(out_dir / "shapes.geojson", driver="GeoJSON")
 
     # save attributes (static)
-    attrs = gdf[[unit_id_col, "dem_votes", "rep_votes", "weight", "centroid_x", "centroid_y"]].rename(columns={unit_id_col: "unit_id"})
+    attrs = gdf[
+        [unit_id_col, "dem_votes", "rep_votes", "weight", "centroid_x", "centroid_y"]
+    ].rename(columns={unit_id_col: "unit_id"})
     attrs.to_csv(out_dir / "attributes.csv", index=False)
 
     # save adjacency + mappings
@@ -225,12 +288,14 @@ def main():
         "unit_id_col": unit_id_col,
         "epsg": epsg,
         "n_units": len(gdf),
-        "note": "weight = dem_votes + rep_votes (two-party vote proxy, not census population)."
+        "weight_col": weight_col,
+        "note": "weight is derived from precinct population join (e.g., TOTPOP from PL94-171 blocks).",
     }
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
 
     print(f"✅ Built map pack at: {out_dir}")
     print(f"Units: {len(gdf)} | adjacency keys: {len(adjacency)} | shapes: shapes.geojson")
+
 
 if __name__ == "__main__":
     main()
