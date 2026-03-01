@@ -275,13 +275,49 @@ def try_break_tie_with_swap(
     rng: np.random.Generator,
     max_a: int = 200,
     max_b: int = 200,
-) -> bool:
+    *,
+    # NEW: anti-oscillation hooks (optional)
+    tabu: dict | None = None,     # maps (node, src, dst) -> expire_step
+    step: int | None = None,
+    tabu_ttl: int = 15,
+    # NEW: require at least this much improvement in tie margin
+    min_margin_gain: float = 1e-9,
+) -> tuple[bool, dict | None]:
     """
-    Try a 2-node swap to break a tied district:
+    Try a 2-node swap to break/improve a (near-)tied district:
+
       move a: src -> d_tie
       move b: d_tie -> src
-    Returns True if a swap was applied.
+
+    Returns:
+      (did_swap, swap_meta)
+
+    swap_meta (if did_swap) includes:
+      {
+        "a": int, "b": int,
+        "src": int, "tie": int,
+        "moves": [(node, old_label, new_label), ...]  # for rollback/tabu
+      }
     """
+
+    def is_tabu_move(node: int, src: int, dst: int) -> bool:
+        if tabu is None or step is None:
+            return False
+        # forbid reversing a recent move: (node, dst, src)
+        rev = (int(node), int(dst), int(src))
+        return tabu.get(rev, -1) >= step
+
+    def mark_tabu_move(node: int, src: int, dst: int) -> None:
+        if tabu is None or step is None:
+            return
+        tabu[(int(node), int(src), int(dst))] = step + int(tabu_ttl)
+
+    def vote_margin(d: int) -> float:
+        # party-specific margin for district d
+        if party == "dem":
+            return float(dem_sum[d] - rep_sum[d])
+        else:
+            return float(rep_sum[d] - dem_sum[d])
 
     # Candidate "a" nodes: outside tie that touch tie
     bnodes = boundary_nodes(labels, adj_idx)
@@ -292,44 +328,40 @@ def try_break_tie_with_swap(
         if src == d_tie:
             continue
         if any(labels[nbr] == d_tie for nbr in adj_idx[a]):
+            # tabu: if we would move a src->tie, ensure it's not reversing a recent tie->src
+            if is_tabu_move(a, src, d_tie):
+                continue
             a_candidates.append(a)
 
     if not a_candidates:
-        return False
+        return (False, None)
 
     rng.shuffle(a_candidates)
     a_candidates = a_candidates[:max_a]
 
-    def vote_gain(node: int) -> float:
-        dv = float(dem_votes[node])
-        rv = float(rep_votes[node])
-        return (dv - rv) if party == "dem" else (rv - dv)
-
     for a in a_candidates:
         src = int(labels[a])
         wa = float(weight[a])
-        ga = vote_gain(a)
 
-        # We want bringing a into tie to help the tie margin if possible
-        # (still allow ga <= 0 if needed, but prefer positive)
-        # We'll filter later via tie margin improvement.
-        # Check src removal connectivity early (like move_is_feasible)
+        # connectivity: src must remain connected after removing a
         if not is_connected_district_after_removal(a, src, labels, adj_idx, int(district_counts[src])):
             continue
 
-        # After moving a in, tie pop increases by wa; might exceed max_pop
-        pop_tie_new = pop[d_tie] + wa
+        # removing a from src must keep src within bounds
         pop_src_new = pop[src] - wa
         if pop_src_new < min_pop:
-            continue  # can't remove from src at all
+            continue
 
-        # Candidate "b" nodes: currently in tie, that touch src (so dst stays connected when adding b to src)
+        # Candidate "b" nodes: in tie, touching src
         b_candidates = []
         for b in bnodes:
             b = int(b)
             if int(labels[b]) != d_tie:
                 continue
             if any(labels[nbr] == src for nbr in adj_idx[b]):
+                # tabu: if we would move b tie->src, ensure it's not reversing src->tie
+                if is_tabu_move(b, d_tie, src):
+                    continue
                 b_candidates.append(b)
 
         if not b_candidates:
@@ -338,10 +370,14 @@ def try_break_tie_with_swap(
         rng.shuffle(b_candidates)
         b_candidates = b_candidates[:max_b]
 
+        m_before = vote_margin(d_tie)
+
+        dv_a = float(dem_votes[a]); rv_a = float(rep_votes[a])
+
         for b in b_candidates:
             wb = float(weight[b])
 
-            # If tie would be overfull after adding a, b must offset it
+            # population after full swap
             pop_tie_after = pop[d_tie] + wa - wb
             pop_src_after = pop[src] - wa + wb
 
@@ -350,33 +386,31 @@ def try_break_tie_with_swap(
             if pop_src_after < min_pop or pop_src_after > max_pop:
                 continue
 
-            # tie connectivity after removing b
+            # tie must remain connected after removing b
             if not is_connected_district_after_removal(b, d_tie, labels, adj_idx, int(district_counts[d_tie])):
                 continue
 
-            # src connectivity after removing a already checked; adding b keeps src connected because b touches src.
-            # But also ensure b addition doesn't create weird disconnectedness: since it touches src, it's fine.
-
-            # Check tie margin improvement
-            # Current tie margin:
-            m_before = party_margin(dem_sum, rep_sum, party)[d_tie]
-
-            # Apply swap virtually
-            dv_a = float(dem_votes[a]); rv_a = float(rep_votes[a])
             dv_b = float(dem_votes[b]); rv_b = float(rep_votes[b])
 
-            # tie gets +a -b
+            # margin after swap on tie: +a - b
             if party == "dem":
                 m_after = m_before + (dv_a - rv_a) - (dv_b - rv_b)
             else:
                 m_after = m_before + (rv_a - dv_a) - (rv_b - dv_b)
 
-            # We want to break tie: m_after > 0 (or at least improve)
-            if m_after <= m_before:
+            # require improvement (and a tiny minimum gain to avoid floating jitter)
+            if m_after <= m_before + float(min_margin_gain):
                 continue
 
-            # ---- Commit swap ----
+            # ---- Commit swap (b first, then a) ----
+            # Save moves for rollback
+            moves = []
+
             # Move b: tie -> src
+            old_b = int(labels[b])
+            if old_b != d_tie:
+                # label changed since candidate list was formed; skip
+                continue
             apply_move(
                 node=b, src=d_tie, dst=src,
                 labels=labels, pop=pop,
@@ -384,7 +418,23 @@ def try_break_tie_with_swap(
                 district_counts=district_counts,
                 weight=weight, dem_votes=dem_votes, rep_votes=rep_votes
             )
-            # Move a: src -> tie  (note: a is still labeled src until we move it)
+            moves.append((int(b), int(d_tie), int(src)))
+            mark_tabu_move(int(b), int(d_tie), int(src))
+
+            # Move a: src -> tie
+            old_a = int(labels[a])
+            if old_a != src:
+                # a moved since selection; rollback b and skip
+                apply_move(
+                    node=b, src=src, dst=d_tie,
+                    labels=labels, pop=pop,
+                    dem_sum=dem_sum, rep_sum=rep_sum,
+                    district_counts=district_counts,
+                    weight=weight, dem_votes=dem_votes, rep_votes=rep_votes
+                )
+                # note: we don't need to "unmark" tabu; it's fine to keep it conservative
+                continue
+
             apply_move(
                 node=a, src=src, dst=d_tie,
                 labels=labels, pop=pop,
@@ -392,9 +442,27 @@ def try_break_tie_with_swap(
                 district_counts=district_counts,
                 weight=weight, dem_votes=dem_votes, rep_votes=rep_votes
             )
-            return True
+            moves.append((int(a), int(src), int(d_tie)))
+            mark_tabu_move(int(a), int(src), int(d_tie))
 
-    return False
+            swap_meta = {
+                "a": int(a),
+                "b": int(b),
+                "src": int(src),
+                "tie": int(d_tie),
+                "moves": moves,  # [(node, old, new), ...]
+            }
+            return (True, swap_meta)
+
+    return (False, None)
+
+def score_tuple(dem_sum, rep_sum, party, cfg):
+    seats = seats_won(dem_sum, rep_sum, party)
+    m = party_margin(dem_sum, rep_sum, party)
+    losers = m[m <= 0]
+    closest_loss = float(losers.max()) if losers.size > 0 else float(m.min())
+    # maximize seats, then maximize closest_loss (less negative is better)
+    return (int(seats), float(closest_loss))
 
 
 def boundary_nodes(labels: np.ndarray, adj_idx: List[List[int]]) -> np.ndarray:
@@ -411,7 +479,6 @@ def boundary_nodes(labels: np.ndarray, adj_idx: List[List[int]]) -> np.ndarray:
                 break
     return np.where(out)[0]
 
-
 def hillclimb_max_seats(
     *,
     labels_init: np.ndarray,
@@ -423,12 +490,13 @@ def hillclimb_max_seats(
     cfg: HillclimbConfig,
 ) -> np.ndarray:
     """
-    Hillclimb by single-node boundary moves that:
-      - preserve contiguity (src remains connected; dst stays connected by adjacency)
-      - preserve population bounds (within cfg.pop_tolerance)
-      - greedily improve objective (maximize seats for cfg.party)
+    Hillclimb by single-node boundary moves with optional "tiny mode" near-flip helpers.
 
-    Returns improved labels.
+    Fixes added:
+      - tabu (prevents immediate reversals / 2-cycles)
+      - tiny-target cooldown (prevents hammering the same district)
+      - accept tiny swap ONLY if it improves a stable score (seats, closest_loss) or improves objective
+      - fingerprints guard (breaks out of oscillations if they still happen)
     """
     labels = labels_init.copy()
     rng = np.random.default_rng(cfg.seed)
@@ -444,6 +512,46 @@ def hillclimb_max_seats(
     best_obj = objective(dem_sum, rep_sum, cfg.party, cfg)
     no_improve = 0
 
+    # ----------------------------
+    # Anti-oscillation state
+    # ----------------------------
+    TABU_TTL = int(getattr(cfg, "tabu_ttl", 15))
+    TARGET_COOLDOWN = int(getattr(cfg, "tiny_target_cooldown", 10))
+    MAX_STUCK_FINGERPRINTS = int(getattr(cfg, "max_stuck_fingerprints", 3))
+
+    tabu: dict[tuple[int, int, int], int] = {}  # (node, src, dst) -> expire_step
+    target_cooldown_until: dict[int, int] = {}  # district -> expire_step
+    recent_fingerprints = deque(maxlen=8)
+
+    def score_tuple() -> tuple[int, float]:
+        """Stable score: maximize seats, then maximize closest_loss (less negative is better)."""
+        seats = seats_won(dem_sum, rep_sum, cfg.party)
+        m = party_margin(dem_sum, rep_sum, cfg.party)
+        losers = m[m <= 0]
+        closest_loss = float(losers.max()) if losers.size > 0 else float(m.min())
+        return (int(seats), float(closest_loss))
+
+    def is_tabu(node: int, src: int, dst: int, step: int) -> bool:
+        """Block immediate reversals and recent repeated moves."""
+        # forbid reversing (node, dst, src) if it's still active
+        rev = (int(node), int(dst), int(src))
+        return tabu.get(rev, -1) >= step
+
+    def mark_tabu(node: int, src: int, dst: int, step: int) -> None:
+        tabu[(int(node), int(src), int(dst))] = step + TABU_TTL
+
+    def fingerprint(labels_arr: np.ndarray) -> int:
+        # cheap-ish stable-ish hash to detect oscillations; don't need cryptographic stability
+        # use a subset + mixing to keep fast
+        n = labels_arr.shape[0]
+        if n <= 0:
+            return 0
+        idx = np.linspace(0, n - 1, num=min(256, n), dtype=int)
+        x = labels_arr[idx].astype(np.int64)
+        # mix
+        h = int(np.bitwise_xor.reduce((x + 1315423911) * 2654435761) & 0xFFFFFFFF)
+        return h
+
     print(f"[hillclimb] Starting optimization for party='{cfg.party}'")
     print(f"[hillclimb] Initial seats: {seats_won(dem_sum, rep_sum, cfg.party)}")
     print(f"[hillclimb] Initial objective: {best_obj:.6f}")
@@ -453,8 +561,21 @@ def hillclimb_max_seats(
     print("unique labels =", len(set(labels.tolist())), "min/max =", int(labels.min()), int(labels.max()))
     print("adj edges total =", sum(len(nbrs) for nbrs in adj_idx))
     print("avg degree =", (sum(len(nbrs) for nbrs in adj_idx) / max(1, len(adj_idx))))
+
     for step in range(cfg.max_steps):
         tested = feasible = 0
+
+        # Oscillation detection (very lightweight)
+        fp = fingerprint(labels)
+        recent_fingerprints.append(fp)
+        if len(recent_fingerprints) == recent_fingerprints.maxlen:
+            # if the last few are repeating, we're cycling; force a cooldown escape
+            if len(set(list(recent_fingerprints)[-6:])) <= MAX_STUCK_FINGERPRINTS:
+                # back off tiny mode aggressively for a bit
+                # (prevents the 7<->8 seat loop you saw)
+                for d in range(num_districts):
+                    target_cooldown_until[d] = max(target_cooldown_until.get(d, -1), step + TARGET_COOLDOWN)
+                print("[hillclimb] detected possible cycle; applying global tiny cooldown", flush=True)
 
         # Always compute boundary nodes FIRST (used by tie/tiny logic)
         bnodes = boundary_nodes(labels, adj_idx)
@@ -474,15 +595,20 @@ def hillclimb_max_seats(
             d_target = None
 
         # ---- TINY MODE LOCK: handle tie/-1 walls before anything else ----
-        # tiny_mode triggers when we're very close to flipping the closest-losing seat
         tiny_mode = (d_target is not None and cl >= -cfg.tiny_window)
+
+        # Don't keep targeting same district every step
+        if tiny_mode and (step < target_cooldown_until.get(int(d_target), -1)):
+            tiny_mode = False
 
         if tiny_mode:
             print(f"[tiny] step={step+1} d_target={d_target} margin={cl:.1f}", flush=True)
 
-            # (A) First: try swap assist on the target district (works for tie AND -1 walls)
-            # You can attempt swap every step in tiny_mode, or every few steps.
-            did_swap = try_break_tie_with_swap(
+            score_before = score_tuple()
+            obj_before = best_obj
+
+            # (A) Try swap assist on the target district
+            did_swap, swap_meta = try_break_tie_with_swap(
                 d_tie=d_target,
                 labels=labels,
                 adj_idx=adj_idx,
@@ -499,14 +625,54 @@ def hillclimb_max_seats(
                 rng=rng,
                 max_a=cfg.swap_max_a,
                 max_b=cfg.swap_max_b,
+                tabu=tabu,
+                step=step,
+                tabu_ttl=TABU_TTL,
             )
-            if did_swap:
-                best_obj = objective(dem_sum, rep_sum, cfg.party, cfg)
-                no_improve = 0
-                print("[tiny] swap applied", flush=True)
-                # print progress line below
+
+            # Accept swap ONLY if it improves stable score OR improves objective
+            if did_swap and swap_meta is not None:
+                score_after = score_tuple()
+                obj_after = objective(dem_sum, rep_sum, cfg.party, cfg)
+
+                accept_swap = (score_after > score_before) or (obj_after > obj_before + 1e-12)
+
+                if accept_swap:
+                    best_obj = obj_after
+                    no_improve = 0
+                    print(
+                        f"[tiny] swap applied score {score_before}->{score_after} "
+                        f"obj {obj_before:.6f}->{obj_after:.6f}",
+                        flush=True,
+                    )
+                    target_cooldown_until[int(d_target)] = step + TARGET_COOLDOWN
+
+                else:
+                    # ✅ ROLLBACK swap using swap_meta
+                    for node, old_lbl, new_lbl in reversed(swap_meta["moves"]):
+                        apply_move(
+                            node=int(node),
+                            src=int(new_lbl),
+                            dst=int(old_lbl),
+                            labels=labels,
+                            pop=pop,
+                            dem_sum=dem_sum,
+                            rep_sum=rep_sum,
+                            district_counts=district_counts,
+                            weight=weight,
+                            dem_votes=dem_votes,
+                            rep_votes=rep_votes,
+                        )
+
+                    no_improve += 1
+                    target_cooldown_until[int(d_target)] = step + TARGET_COOLDOWN
+                    print(
+                        f"[tiny] swap rejected + rolled back score {score_before}->{score_after} "
+                        f"obj {obj_before:.6f}->{obj_after:.6f}",
+                        flush=True,
+                    )
             else:
-                # (B) If swap didn't work, try a single-node move INTO target that improves target margin
+                # (B) Single-node move INTO target that improves target margin
                 best = None
                 best_gain = 0.0
 
@@ -516,6 +682,10 @@ def hillclimb_max_seats(
                         continue
 
                     if not any(labels[nbr] == d_target for nbr in adj_idx[node]):
+                        continue
+
+                    # tabu reversal guard
+                    if is_tabu(int(node), src, int(d_target), step):
                         continue
 
                     if not move_is_feasible(
@@ -540,13 +710,16 @@ def hillclimb_max_seats(
                     rv = float(rep_votes[node])
                     gain = (dv - rv) if cfg.party == "dem" else (rv - dv)
 
-                    # Only accept moves that help target
                     if gain > best_gain:
                         best_gain = gain
                         best = (int(node), int(src), int(d_target))
 
                 if best is not None and best_gain > 0:
                     node_best, src_best, dst_best = best
+
+                    score_before = score_tuple()
+                    obj_before = best_obj
+
                     apply_move(
                         node=node_best,
                         src=src_best,
@@ -560,16 +733,69 @@ def hillclimb_max_seats(
                         dem_votes=dem_votes,
                         rep_votes=rep_votes,
                     )
-                    best_obj = objective(dem_sum, rep_sum, cfg.party, cfg)
-                    no_improve = 0
-                    print(f"[tiny] single-node gain move applied gain={best_gain:.1f}", flush=True)
-                else:
-                    # (C) Plateau shuffle: allow a sideways move that DOES NOT WORSEN target margin
-                    # We'll use your best-of-batch but with a guard
-                    best_move = None
-                    best_delta = -1e18  # allow equal/sideways within tiny mode
 
-                    # widen search in tiny mode
+                    mark_tabu(node_best, src_best, dst_best, step)
+
+                    obj_after = objective(dem_sum, rep_sum, cfg.party, cfg)
+                    score_after = score_tuple()
+                    accept_move = (score_after > score_before) or (obj_after > obj_before + 1e-12)
+
+                    if accept_move:
+                        best_obj = obj_after
+                        no_improve = 0
+                        target_cooldown_until[int(d_target)] = step + TARGET_COOLDOWN
+                        print(f"[tiny] single-node gain move applied gain={best_gain:.1f}", flush=True)
+
+                    else:
+                        # ✅ ROLLBACK the single-node move
+                        apply_move(
+                            node=node_best,
+                            src=dst_best,
+                            dst=src_best,
+                            labels=labels,
+                            pop=pop,
+                            dem_sum=dem_sum,
+                            rep_sum=rep_sum,
+                            district_counts=district_counts,
+                            weight=weight,
+                            dem_votes=dem_votes,
+                            rep_votes=rep_votes,
+                        )
+
+                        no_improve += 1
+                        target_cooldown_until[int(d_target)] = step + TARGET_COOLDOWN
+                        print("[tiny] single-node move rejected + rolled back", flush=True)
+
+                    # accept only if stable score or objective improved
+                    if (score_after > score_before) or (obj_after > obj_before + 1e-12):
+                        best_obj = obj_after
+                        no_improve = 0
+                        target_cooldown_until[int(d_target)] = step + TARGET_COOLDOWN
+                        print(f"[tiny] single-node gain move applied gain={best_gain:.1f}", flush=True)
+                    else:
+                        # rollback (we CAN rollback single node easily)
+                        apply_move(
+                            node=node_best,
+                            src=dst_best,
+                            dst=src_best,
+                            labels=labels,
+                            pop=pop,
+                            dem_sum=dem_sum,
+                            rep_sum=rep_sum,
+                            district_counts=district_counts,
+                            weight=weight,
+                            dem_votes=dem_votes,
+                            rep_votes=rep_votes,
+                        )
+                        no_improve += 1
+                        target_cooldown_until[int(d_target)] = step + TARGET_COOLDOWN
+                        print("[tiny] single-node move rejected (no net progress)", flush=True)
+
+                else:
+                    # (C) Plateau shuffle: sideways move that DOES NOT WORSEN target margin
+                    best_move = None
+                    best_delta = -1e18
+
                     cand_nodes = (
                         rng.choice(bnodes, size=min(cfg.boundary_sample_k, len(bnodes)), replace=False)
                         if len(bnodes) > cfg.boundary_sample_k
@@ -585,6 +811,10 @@ def hillclimb_max_seats(
                             continue
 
                         for dst in nbr_districts:
+                            # tabu reversal guard
+                            if is_tabu(int(node), src, int(dst), step):
+                                continue
+
                             tested += 1
                             if not move_is_feasible(
                                 node=node,
@@ -605,22 +835,19 @@ def hillclimb_max_seats(
                                 continue
                             feasible += 1
 
-                            # compute target margin after move (fast)
                             dv = float(dem_votes[node]); rv = float(rep_votes[node])
                             gain_party = (dv - rv) if cfg.party == "dem" else (rv - dv)
 
-                            # effect on target district margin only if move involves target
                             m_target_after = m_target_before
                             if src == d_target:
                                 m_target_after = m_target_before - gain_party
                             elif dst == d_target:
                                 m_target_after = m_target_before + gain_party
 
-                            # guard: do not worsen target margin in tiny mode
                             if m_target_after < m_target_before:
                                 continue
 
-                            # compute global delta objective
+                            # compute delta objective
                             dem_src_old, rep_src_old = dem_sum[src], rep_sum[src]
                             dem_dst_old, rep_dst_old = dem_sum[dst], rep_sum[dst]
 
@@ -639,7 +866,6 @@ def hillclimb_max_seats(
                                 best_delta = delta
                                 best_move = (int(node), int(src), int(dst))
 
-                    # accept plateau moves with probability
                     accept = False
                     if best_move is not None:
                         if best_delta > 1e-12:
@@ -649,6 +875,10 @@ def hillclimb_max_seats(
 
                     if accept and best_move is not None:
                         node, src, dst = best_move
+
+                        score_before = score_tuple()
+                        obj_before = best_obj
+
                         apply_move(
                             node=node, src=src, dst=dst,
                             labels=labels, pop=pop,
@@ -656,14 +886,35 @@ def hillclimb_max_seats(
                             district_counts=district_counts,
                             weight=weight, dem_votes=dem_votes, rep_votes=rep_votes
                         )
-                        best_obj = objective(dem_sum, rep_sum, cfg.party, cfg)
-                        no_improve = 0
-                        print(f"[tiny] plateau shuffle applied delta={best_delta:.6f}", flush=True)
+                        mark_tabu(node, src, dst, step)
+
+                        obj_after = objective(dem_sum, rep_sum, cfg.party, cfg)
+                        score_after = score_tuple()
+
+                        # accept if it didn't worsen stable score and doesn't worsen objective too much
+                        if (score_after >= score_before) and (obj_after >= obj_before - 1e-12):
+                            best_obj = obj_after
+                            no_improve = 0
+                            target_cooldown_until[int(d_target)] = step + TARGET_COOLDOWN
+                            print(f"[tiny] plateau shuffle applied delta={best_delta:.6f}", flush=True)
+                        else:
+                            # rollback
+                            apply_move(
+                                node=node, src=dst, dst=src,
+                                labels=labels, pop=pop,
+                                dem_sum=dem_sum, rep_sum=rep_sum,
+                                district_counts=district_counts,
+                                weight=weight, dem_votes=dem_votes, rep_votes=rep_votes
+                            )
+                            no_improve += 1
+                            target_cooldown_until[int(d_target)] = step + TARGET_COOLDOWN
+                            print("[tiny] plateau shuffle rejected (no net progress)", flush=True)
                     else:
                         no_improve += 1
+                        target_cooldown_until[int(d_target)] = step + TARGET_COOLDOWN
                         print("[tiny] no acceptable move found", flush=True)
 
-            # ---- Progress print (keep your current debug line) ----
+            # ---- Progress print ----
             seats_now = seats_won(dem_sum, rep_sum, cfg.party)
             m2 = party_margin(dem_sum, rep_sum, cfg.party)
             losers2 = m2[m2 <= 0]
@@ -680,13 +931,13 @@ def hillclimb_max_seats(
                 print(f"[hillclimb] stopping: no improvement for {cfg.patience} steps", flush=True)
                 break
 
-            # tiny mode handled this step fully
-            continue
+            continue  # tiny mode handled this step fully
 
-        # ---- NON-TINY MODE: your original two-phase search (near-flip target then generic) ----
+        # ---- NON-TINY MODE ----
 
-        # ---- Phase 1: targeted "flip the next seat" search when near flip ----
         did_move = False
+
+        # ---- Phase 1: targeted near-flip search ----
         if d_target is not None and cl >= -cfg.near_flip_window:
             best = None
             best_delta = -1e18
@@ -696,6 +947,10 @@ def hillclimb_max_seats(
                 if src == d_target:
                     continue
                 if not any(labels[nbr] == d_target for nbr in adj_idx[node]):
+                    continue
+
+                # tabu reversal guard
+                if is_tabu(int(node), src, int(d_target), step):
                     continue
 
                 tested += 1
@@ -748,11 +1003,12 @@ def hillclimb_max_seats(
                         district_counts=district_counts,
                         weight=weight, dem_votes=dem_votes, rep_votes=rep_votes
                     )
+                    mark_tabu(node, src, dst, step)
                     best_obj = objective(dem_sum, rep_sum, cfg.party, cfg)
                     no_improve = 0
                     did_move = True
 
-        # ---- Phase 2: generic best-of-batch if we didn’t move in targeted mode ----
+        # ---- Phase 2: generic best-of-batch ----
         if not did_move:
             best_move = None
             best_delta = 0.0
@@ -770,6 +1026,10 @@ def hillclimb_max_seats(
                     continue
 
                 for dst in nbr_districts:
+                    # tabu reversal guard
+                    if is_tabu(int(node), src, int(dst), step):
+                        continue
+
                     tested += 1
                     if not move_is_feasible(
                         node=node,
@@ -788,7 +1048,6 @@ def hillclimb_max_seats(
                         district_counts=district_counts,
                     ):
                         continue
-
                     feasible += 1
 
                     dv = float(dem_votes[node]); rv = float(rep_votes[node])
@@ -825,12 +1084,13 @@ def hillclimb_max_seats(
                     district_counts=district_counts,
                     weight=weight, dem_votes=dem_votes, rep_votes=rep_votes
                 )
+                mark_tabu(node, src, dst, step)
                 best_obj = objective(dem_sum, rep_sum, cfg.party, cfg)
                 no_improve = 0
             else:
                 no_improve += 1
 
-        # ---- Progress print every step (keep your current debug line) ----
+        # ---- Progress print ----
         seats_now = seats_won(dem_sum, rep_sum, cfg.party)
         m2 = party_margin(dem_sum, rep_sum, cfg.party)
         losers2 = m2[m2 <= 0]
@@ -847,7 +1107,6 @@ def hillclimb_max_seats(
             print(f"[hillclimb] stopping: no improvement for {cfg.patience} steps", flush=True)
             break
 
-        ### end step loop (main hillclimb loop)
     print("------------------------------------------------------")
     print(f"[hillclimb] Finished after {step+1} steps.")
     print(f"[hillclimb] Final seats: {seats_won(dem_sum, rep_sum, cfg.party)}")

@@ -17,7 +17,11 @@ from gerry.algos.hillclimber import (
     build_adj_idx,
     hillclimb_max_seats,
 )
-from gerry.algos.kmeans_postprocess_contig import enforce_contiguity_by_reattach
+from gerry.algos.postprocess_contig import (
+    enforce_contiguity_postprocess,
+    rebalance_population_local,
+    SeatGuard,
+)
 
 ''' First iteration of hillclimber
 Starts from the kmeans map that is generated 
@@ -196,12 +200,19 @@ def main():
 
     # Phase A: fix starting plan so moves become feasible
     print("[14] repairing contiguity...", flush=True)
-    labels_init = enforce_contiguity_by_reattach(
+        # Phase A: fix starting plan so moves become feasible (lax)
+    seat_guard_init = SeatGuard.from_arrays(labels_init, dem_votes, rep_votes, num_districts)
+
+    labels_init = enforce_contiguity_postprocess(
         labels=labels_init,
         weight=weight,
         adj_idx=adj_idx,
         num_districts=num_districts,
-        eps=0.25,   # lax repair tolerance
+        eps=0.25,          # lax, like you had
+        max_passes=10,
+        enable_bridge=True,
+        max_bridge_len=30,
+        seat_guard=seat_guard_init,
     )
     print("[15] contiguity repair done", flush=True)
     if labels_init is None:
@@ -209,14 +220,20 @@ def main():
 
     # 4) Hillclimb config
     
+    # hillclimb params: global + state override
+    hc_base = ((cfg.get("algos", {}) or {}).get("hillclimb", {}) or {}).copy()
+    scfg = (cfg.get("states", {}) or {}).get(args.state, {}) or {}
+    hc_override = (((scfg.get("algos", {}) or {}).get("hillclimb", {}) or {}))
+    hc_base.update(hc_override)
+
     hc_cfg = HillclimbConfig(
         party=args.party,
-        pop_tolerance=0.15,     # <-- hillclimb tolerance (try 0.12–0.18)
-        boundary_sample_k=4000,
-        max_steps=300, # 250 is tie for dems/ill with original params
-        patience=20,
-        seed=args.seed,
-        margin_weight=0.02,
+        pop_tolerance=float(hc_base.get("pop_tolerance", 0.15)),
+        boundary_sample_k=int(hc_base.get("boundary_sample_k", 4000)),
+        max_steps=int(hc_base.get("max_steps", 300)),
+        patience=int(hc_base.get("patience", 20)),
+        seed=int(args.seed),
+        margin_weight=float(hc_base.get("margin_weight", 0.02)),
     )
 
     # 5) Run hillclimber
@@ -231,6 +248,38 @@ def main():
         cfg=hc_cfg,
     )
     print("[17] hillclimb done", flush=True)
+        # ----------------------------
+    # FINAL SHIP POSTPROCESS
+    # ----------------------------
+    print("[18] final contiguity + pop rebalance postprocess...", flush=True)
+
+    # Seat guard prevents flips during repair/rebalance
+    seat_guard = SeatGuard.from_arrays(labels_final, dem_votes, rep_votes, num_districts)
+
+    # 1) strict-ish final contiguity repair (tighter than your initial eps=0.25)
+    labels_final = enforce_contiguity_postprocess(
+        labels=labels_final,
+        weight=weight,
+        adj_idx=adj_idx,
+        num_districts=num_districts,
+        eps=0.12,              # tighter for final; tune 0.10–0.15
+        max_passes=10,
+        enable_bridge=True,
+        max_bridge_len=30,
+        seat_guard=seat_guard,
+    )
+
+    # 2) small population balancing pass (safe single-node moves)
+    labels_final = rebalance_population_local(
+        labels=labels_final,
+        weight=weight,
+        adj_idx=adj_idx,
+        num_districts=num_districts,
+        max_moves=800,
+        seat_guard=seat_guard,
+    )
+
+    print("[19] postprocess done", flush=True)
 
     # 6) Export
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")

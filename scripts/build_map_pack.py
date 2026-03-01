@@ -176,11 +176,19 @@ def _apply_state_override(cfg: dict, state: str) -> dict:
         cfg["paths"]["assets_dir"] = scfg["assets_dir"]
 
     # vote prefix / party letters can also be overridden per state if you want
-    if scfg.get("contest_prefix"):
-        cfg.setdefault("votes", {})
-        cfg["votes"]["contest_prefix"] = scfg["contest_prefix"]
+    # vote prefix / party letters can be overridden per state
+    svotes = (scfg.get("votes", {}) or {})
 
-    return cfg
+    cfg.setdefault("votes", {})
+
+    if svotes.get("contest_prefix"):
+        cfg["votes"]["contest_prefix"] = svotes["contest_prefix"]
+    if svotes.get("dem_party_letter"):
+        cfg["votes"]["dem_party_letter"] = svotes["dem_party_letter"]
+    if svotes.get("rep_party_letter"):
+        cfg["votes"]["rep_party_letter"] = svotes["rep_party_letter"]
+
+        return cfg
 
 
 def main():
@@ -271,10 +279,24 @@ def main():
     shapes = gdf[[unit_id_col, "geometry"]].rename(columns={unit_id_col: "unit_id"})
     shapes.to_file(out_dir / "shapes.geojson", driver="GeoJSON")
 
+        # extra attributes to carry through into attributes.csv
+    extra_attr_cols = cfg.get("data", {}).get("extra_attr_cols", []) or []
+
+    # allow per-state override if you want it later
+    # (only works if you add states.<state>.extra_attr_cols in config)
+    if args.state:
+        scfg = (cfg.get("states", {}) or {}).get(args.state, {}) or {}
+        sdata = (scfg.get("data", {}) or {})
+        extra_attr_cols = sdata.get("extra_attr_cols", extra_attr_cols) or []
+
+    # keep only extras that actually exist
+    extra_attr_cols = [c for c in extra_attr_cols if c in gdf.columns]
+
     # save attributes (static)
-    attrs = gdf[
-        [unit_id_col, "dem_votes", "rep_votes", "weight", "centroid_x", "centroid_y"]
-    ].rename(columns={unit_id_col: "unit_id"})
+    base_cols = [unit_id_col, "dem_votes", "rep_votes", "weight", "centroid_x", "centroid_y"]
+    attrs_cols = base_cols + extra_attr_cols
+
+    attrs = gdf[attrs_cols].rename(columns={unit_id_col: "unit_id"})
     attrs.to_csv(out_dir / "attributes.csv", index=False)
 
     # save adjacency + mappings

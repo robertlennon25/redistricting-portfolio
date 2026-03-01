@@ -5,14 +5,16 @@ from pathlib import Path
 from datetime import datetime
 
 import numpy as np
+import pandas as pd
 
 from gerry.data.map_pack import load_map_pack
 from gerry.algos.kmeans_softcap import kmeans_softcap_labels
 from export_run import export_run
 
-from gerry.algos.kmeans_postprocess_contig import (
+from gerry.algos.postprocess_contig import (
     build_adj_idx,
-    enforce_contiguity_by_reattach,
+    enforce_contiguity_postprocess,
+    rebalance_population_local
 )
 
 
@@ -100,7 +102,7 @@ def _load_pack_arrays(pack_dir: Path, pack):
     if hasattr(pack, "weight") and pack.weight is not None:
         weight = np.asarray(pack.weight).astype(float)
     else:
-        import pandas as pd
+
         attrs = pd.read_csv(pack_dir / "attributes.csv")
         if "weight" not in attrs.columns:
             raise KeyError("attributes.csv missing 'weight' column; rebuild pack.")
@@ -186,22 +188,45 @@ def main():
         alpha=alpha,
         seed=seed,
     )
+    # NEW postprocessing block 3/1/26
+    adj_json = json.loads((pack_dir / "adjacency.json").read_text())
+    adj_idx = build_adj_idx(unit_ids, adj_json)
 
-    # --- Contiguity postprocess ---
-    adj_path = pack_dir / "adjacency.json"
-    if adj_path.exists():
-        adj_json = json.loads(adj_path.read_text())
-        adj_idx = build_adj_idx(unit_ids, adj_json)
-        labels = enforce_contiguity_by_reattach(
-            labels=labels,
-            weight=weight,
-            adj_idx=adj_idx,
-            num_districts=num_districts,
-            eps=float(args.contig_eps),
-        )
-    else:
-        print(f"⚠️ No adjacency.json found at {adj_path}; skipping contiguity postprocess.")
+    seat_guard = None
+    # If you want seat safety:
+    try:
+        import pandas as pd
+        attrs = pd.read_csv(pack_dir / "attributes.csv")
+        dem = attrs["dem_votes"].astype(float).values
+        rep = attrs["rep_votes"].astype(float).values
+        seat_guard = SeatGuard.from_arrays(labels, dem, rep, num_districts)
+    except Exception:
+        seat_guard = None
 
+    labels = enforce_contiguity_postprocess(
+        labels=labels,
+        weight=weight,
+        adj_idx=adj_idx,
+        num_districts=num_districts,
+        eps=0.15,             # looser during repair
+        max_passes=10,
+        enable_bridge=True,
+        max_bridge_len=30,
+        seat_guard=seat_guard,  # None = ignore seat flips
+    )
+
+    # Optional: a bit more pop balance afterward
+    labels = rebalance_population_local(
+        labels=labels,
+        weight=weight,
+        adj_idx=adj_idx,
+        num_districts=num_districts,
+        max_moves=800,
+        seat_guard=seat_guard,
+    )
+    #end NEW postprocessing block 3/1/26
+
+  
     # --- Export ---
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     folder_name = f"kmeans_softcap_{run_id}"
