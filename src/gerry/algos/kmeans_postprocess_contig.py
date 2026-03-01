@@ -139,3 +139,119 @@ def enforce_contiguity_by_reattach(
             break
 
     return labels
+
+from collections import deque
+import numpy as np
+
+
+def _district_components(labels, adj_idx, district):
+    nodes = np.where(labels == district)[0]
+    if len(nodes) == 0:
+        return []
+
+    seen = set()
+    comps = []
+
+    for start in nodes:
+        if start in seen:
+            continue
+
+        q = deque([start])
+        comp = []
+        seen.add(start)
+
+        while q:
+            x = q.popleft()
+            comp.append(x)
+            for nbr in adj_idx[x]:
+                if nbr not in seen and labels[nbr] == district:
+                    seen.add(nbr)
+                    q.append(nbr)
+
+        comps.append(comp)
+
+    # largest first
+    comps.sort(key=len, reverse=True)
+    return comps
+
+
+def enforce_contiguity_by_reattach(
+    labels,
+    weight,
+    adj_idx,
+    num_districts,
+    eps=0.20,
+):
+    """
+    Makes each district connected by moving disconnected components
+    to adjacent districts, while respecting loose population bounds.
+
+    eps: allowed pop tolerance during repair (looser than final tolerance)
+    """
+
+    labels = labels.copy()
+
+    total = float(weight.sum())
+    ideal = total / num_districts
+    min_pop = ideal * (1 - eps)
+    max_pop = ideal * (1 + eps)
+
+    pop = np.zeros(num_districts)
+    for d in range(num_districts):
+        pop[d] = float(weight[labels == d].sum())
+
+    print(f"[repair] Starting contiguity repair (eps={eps})")
+
+    changed = True
+    passes = 0
+
+    while changed:
+        changed = False
+        passes += 1
+
+        for d in range(num_districts):
+            comps = _district_components(labels, adj_idx, d)
+
+            if len(comps) <= 1:
+                continue  # already connected
+
+            # keep largest component, move others
+            core = comps[0]
+            islands = comps[1:]
+
+            for comp in islands:
+                comp_weight = float(weight[comp].sum())
+
+                # find neighboring districts
+                neighbor_districts = set()
+                for node in comp:
+                    for nbr in adj_idx[node]:
+                        if labels[nbr] != d:
+                            neighbor_districts.add(labels[nbr])
+
+                moved = False
+                for target in neighbor_districts:
+                    if pop[target] + comp_weight > max_pop:
+                        continue
+                    if pop[d] - comp_weight < min_pop:
+                        continue
+
+                    # move whole component
+                    for node in comp:
+                        labels[node] = target
+
+                    pop[d] -= comp_weight
+                    pop[target] += comp_weight
+                    changed = True
+                    moved = True
+                    break
+
+                if not moved:
+                    # if no feasible neighbor, skip (rare)
+                    continue
+
+        if passes > 10:
+            break
+
+    print(f"[repair] Finished after {passes} passes")
+    return labels

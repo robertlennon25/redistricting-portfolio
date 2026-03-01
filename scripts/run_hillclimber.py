@@ -6,6 +6,7 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
+import geopandas as gpd
 
 from gerry.data.map_pack import load_map_pack
 from export_run import export_run
@@ -19,7 +20,7 @@ from gerry.algos.hillclimber import (
 from gerry.algos.kmeans_postprocess_contig import enforce_contiguity_by_reattach
 
 ''' First iteration of hillclimber
-Starts from teh kmeans map that is generated 
+Starts from the kmeans map that is generated 
 example usage from repo root: 
 
 python3 scripts/run_hillclimber.py --config config.yaml --state ny --party rep
@@ -118,7 +119,7 @@ def _load_latest_kmeans_labels(state_outputs_root: Path, pack_dir: Path) -> np.n
     print(f"Using latest kmeans plan from {run_dir}")
 
     # Load labels from exported GeoJSON
-    import geopandas as gpd
+ 
     gdf = gpd.read_file(map_data_path)
     if "district" not in gdf.columns:
         return None
@@ -156,6 +157,7 @@ def main():
     state_outputs_root.mkdir(parents=True, exist_ok=True)
 
     pack = load_map_pack(pack_dir)
+    print("[4] pack loaded", flush=True)
     unit_ids, coords, weight, dem_votes, rep_votes = _load_pack_arrays(pack_dir, pack)
 
     num_districts = int(
@@ -164,9 +166,12 @@ def main():
             (cfg.get("run", {}) or {}).get("num_districts", 17),
         )
     )
-
+    
     # 1) Try loading latest kmeans
+    print("[7] loading starting labels...", flush=True)
     labels_init = _load_latest_kmeans_labels(state_outputs_root, pack_dir)
+    print("[8] latest labels:", "FOUND" if labels_init is not None else "NONE", flush=True)
+
 
     # 2) If not found, generate one
     if labels_init is None:
@@ -181,31 +186,41 @@ def main():
             seed=args.seed,
         )
 
-    # 3) Build adjacency
+    # 3) Build adjacency (must happen BEFORE repair)
+    print("[11] reading adjacency.json...", flush=True)
     adj_json = json.loads((pack_dir / "adjacency.json").read_text())
+
+    print("[12] building adj_idx...", flush=True)
     adj_idx = build_adj_idx(unit_ids, adj_json)
-    # Phase A: fix kmeans plan so moves become feasible
+    print("[13] adj_idx built", flush=True)
+
+    # Phase A: fix starting plan so moves become feasible
+    print("[14] repairing contiguity...", flush=True)
     labels_init = enforce_contiguity_by_reattach(
         labels=labels_init,
         weight=weight,
         adj_idx=adj_idx,
         num_districts=num_districts,
-        eps=0.25,   # <-- lax repair tolerance (try 0.20–0.30)
+        eps=0.25,   # lax repair tolerance
     )
-    
+    print("[15] contiguity repair done", flush=True)
+    if labels_init is None:
+        raise RuntimeError("labels_init is None after initialization/repair. Something went wrong.")
 
     # 4) Hillclimb config
+    
     hc_cfg = HillclimbConfig(
         party=args.party,
         pop_tolerance=0.15,     # <-- hillclimb tolerance (try 0.12–0.18)
         boundary_sample_k=4000,
-        max_steps=200_000,
-        patience=50_000,
+        max_steps=300, # 250 is tie for dems/ill with original params
+        patience=20,
         seed=args.seed,
         margin_weight=0.02,
     )
 
     # 5) Run hillclimber
+    print("[16] starting hillclimb...", flush=True)
     labels_final = hillclimb_max_seats(
         labels_init=labels_init,
         adj_idx=adj_idx,
@@ -215,6 +230,7 @@ def main():
         num_districts=num_districts,
         cfg=hc_cfg,
     )
+    print("[17] hillclimb done", flush=True)
 
     # 6) Export
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
