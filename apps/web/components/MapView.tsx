@@ -4,6 +4,21 @@ import { MapContainer, TileLayer, GeoJSON, useMap } from "react-leaflet";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import type { DistrictStat } from "./Sidebar";
 
+
+
+function ForceCanvasRenderer() {
+  const map = useMap();
+
+  useEffect(() => {
+    // Force vector layers to render with canvas
+    // (leaflet typings don't always expose this nicely)
+    // @ts-ignore
+    map.options.renderer = L.canvas();
+  }, [map]);
+
+  return null;
+}
+
 type ColorMode = "rainbow" | "party";
 
 function colorForDistrict(d: number) {
@@ -120,7 +135,7 @@ export default function MapView({
     });
   };
 
-  const canvas = useMemo(() => L.canvas({ padding: 0.5 }), []);
+  // const canvas = useMemo(() => L.canvas({ padding: 0.5 }), []);
   const geoSig = useMemo(() => {
     // changes when the run changes; avoids expensive hashing
     const first = (geojson as any)?.features?.[0]?.properties?.unit_id ?? "";
@@ -134,37 +149,37 @@ export default function MapView({
   }, [statsByDistrict]);
 
   return (
-    <MapContainer
-      center={[40.0, -89.0]}
-      zoom={6}
-      style={{ height: "calc(100vh - 56px)", width: "100%" }}
-      preferCanvas={true}
-    >
-      <TileLayer
-        attribution='&copy; OpenStreetMap'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-      />
+  <MapContainer
+    center={[40.0, -89.0]}
+    zoom={6}
+    style={{ height: "calc(100vh - 56px)", width: "100%" }}
+    preferCanvas={true}
+  >
+    <ForceCanvasRenderer />
 
-      <FitToGeoJSON geojson={geojson} />
+    <TileLayer
+      attribution='&copy; OpenStreetMap'
+      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+    />
 
-      {/* Precinct fill layer */}
+    <FitToGeoJSON geojson={geojson} />
+
+    {/* Precinct fill layer */}
+    <GeoJSON
+      key={`precincts_${geoSig}_${colorMode}_${statsSig}`}
+      data={geojson as any}
+      style={styleFn as any}
+      onEachFeature={onEachFeature as any}
+    />
+
+    {/* District boundary overlay */}
+    {showDistrictOutlines && districtsGeojson ? (
       <GeoJSON
-        key={`precincts_${geoSig}_${colorMode}_${statsSig}`}
-        data={geojson as any}
-        style={styleFn as any}
-        onEachFeature={onEachFeature as any}
-        renderer={canvas as any}
+        key={`districts_${(districtsGeojson as any)?.features?.length ?? 0}_${outlineWeight}`}
+        data={districtsGeojson as any}
+        style={districtOutlineStyle as any}
       />
-
-      {/* District boundary overlay */}
-      {showDistrictOutlines && districtsGeojson ? (
-        <GeoJSON
-          key={`districts_${(districtsGeojson as any)?.features?.length ?? 0}_${outlineWeight}`}
-          data={districtsGeojson as any}
-          style={districtOutlineStyle as any}
-          renderer={canvas as any}
-        />
-      ) : null}
-    </MapContainer>
+    ) : null}
+  </MapContainer>
   );
 }
