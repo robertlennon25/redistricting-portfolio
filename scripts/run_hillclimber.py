@@ -11,6 +11,8 @@ import geopandas as gpd
 from gerry.data.map_pack import load_map_pack
 from export_run import export_run
 
+from gerry.viz.frame_recorder import FrameRecorder, FrameMeta
+
 from gerry.algos.kmeans_softcap import kmeans_softcap_labels
 from gerry.algos.hillclimber import (
     HillclimbConfig,
@@ -23,13 +25,13 @@ from gerry.algos.postprocess_contig import (
     SeatGuard,
 )
 
-''' First iteration of hillclimber
-Starts from the kmeans map that is generated 
-example usage from repo root: 
+"""
+First iteration of hillclimber
+Starts from the kmeans map that is generated
 
+example usage from repo root:
 python3 scripts/run_hillclimber.py --config config.yaml --state ny --party rep
-
- '''
+"""
 
 
 # ---------------------------------------------------------------------
@@ -116,14 +118,13 @@ def _load_latest_kmeans_labels(state_outputs_root: Path, pack_dir: Path) -> np.n
         return None
 
     run_dir = state_outputs_root / folder
+    print(f"Using latest kmeans plan from {run_dir}")
+
+    # Load labels from exported GeoJSON
     map_data_path = run_dir / "map_data.geojson"
     if not map_data_path.exists():
         return None
 
-    print(f"Using latest kmeans plan from {run_dir}")
-
-    # Load labels from exported GeoJSON
- 
     gdf = gpd.read_file(map_data_path)
     if "district" not in gdf.columns:
         return None
@@ -151,6 +152,8 @@ def main():
     ap.add_argument("--state", required=True)
     ap.add_argument("--party", choices=["dem", "rep"], required=True)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--frame_every", type=int, default=5, help="Record a flipbook frame every N steps.")
+    ap.add_argument("--fps", type=int, default=12, help="FPS metadata for flipbook playback.")
     args = ap.parse_args()
 
     cfg = yaml.safe_load(open(args.config, "r"))
@@ -170,12 +173,11 @@ def main():
             (cfg.get("run", {}) or {}).get("num_districts", 17),
         )
     )
-    
+
     # 1) Try loading latest kmeans
     print("[7] loading starting labels...", flush=True)
     labels_init = _load_latest_kmeans_labels(state_outputs_root, pack_dir)
     print("[8] latest labels:", "FOUND" if labels_init is not None else "NONE", flush=True)
-
 
     # 2) If not found, generate one
     if labels_init is None:
@@ -198,29 +200,23 @@ def main():
     adj_idx = build_adj_idx(unit_ids, adj_json)
     print("[13] adj_idx built", flush=True)
 
-    # Phase A: fix starting plan so moves become feasible
+    # Phase A: fix starting plan so moves become feasible (lax)
     print("[14] repairing contiguity...", flush=True)
-        # Phase A: fix starting plan so moves become feasible (lax)
     seat_guard_init = SeatGuard.from_arrays(labels_init, dem_votes, rep_votes, num_districts)
-
     labels_init = enforce_contiguity_postprocess(
         labels=labels_init,
         weight=weight,
         adj_idx=adj_idx,
         num_districts=num_districts,
-        eps=0.25,          # lax, like you had
+        eps=0.25,
         max_passes=10,
         enable_bridge=True,
         max_bridge_len=30,
         seat_guard=seat_guard_init,
     )
     print("[15] contiguity repair done", flush=True)
-    if labels_init is None:
-        raise RuntimeError("labels_init is None after initialization/repair. Something went wrong.")
 
-    # 4) Hillclimb config
-    
-    # hillclimb params: global + state override
+    # 4) Hillclimb config (global + state override)
     hc_base = ((cfg.get("algos", {}) or {}).get("hillclimb", {}) or {}).copy()
     scfg = (cfg.get("states", {}) or {}).get(args.state, {}) or {}
     hc_override = (((scfg.get("algos", {}) or {}).get("hillclimb", {}) or {}))
@@ -231,12 +227,49 @@ def main():
         pop_tolerance=float(hc_base.get("pop_tolerance", 0.15)),
         boundary_sample_k=int(hc_base.get("boundary_sample_k", 4000)),
         max_steps=int(hc_base.get("max_steps", 300)),
-        patience=int(hc_base.get("patience", 20)),
+        patience=int(hc_base.get("patience", 250)),
         seed=int(args.seed),
-        margin_weight=float(hc_base.get("margin_weight", 0.02)),
     )
 
-    # 5) Run hillclimber
+    # 5) Define *final* run_dir BEFORE hillclimb so frames go into the right output folder
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    folder_name = f"hillclimb_{args.party}_{run_id}"
+    run_dir = state_outputs_root / folder_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # 6) Flipbook recorder (must use final run_dir)
+    rec = FrameRecorder(
+        pack_dir=pack_dir,
+        run_dir=run_dir,
+        state=args.state,
+        title=f"Hillclimb ({args.party.upper()}) [{args.state}]",
+        dpi=140,
+        figsize=(9.5, 9.5),
+    )
+    frame_no = 0
+    FRAME_EVERY = int(args.frame_every)
+    FPS = int(args.fps)
+
+    def on_frame(step: int, labels: np.ndarray, stats: dict):
+        nonlocal frame_no
+        meta = FrameMeta(
+            step=int(step),
+            seats=int(stats["seats"]),
+            closest_loss=float(stats["closest_loss"]),
+            objective=float(stats["objective"]),
+            locked=int(stats.get("locked", 0)),
+        )
+        rec.record(
+            frame_no=frame_no,
+            labels=labels,
+            meta=meta,
+            edgecolor=None,
+            linewidth=0.10,
+            margins=stats.get("margins")
+        )
+        frame_no += 1
+
+    # 7) Run hillclimber (records frames)
     print("[16] starting hillclimb...", flush=True)
     labels_final = hillclimb_max_seats(
         labels_init=labels_init,
@@ -246,30 +279,28 @@ def main():
         rep_votes=rep_votes,
         num_districts=num_districts,
         cfg=hc_cfg,
+        on_frame=on_frame,
+        frame_every=FRAME_EVERY,
     )
     print("[17] hillclimb done", flush=True)
-        # ----------------------------
-    # FINAL SHIP POSTPROCESS
-    # ----------------------------
+
+    # 8) FINAL SHIP POSTPROCESS
     print("[18] final contiguity + pop rebalance postprocess...", flush=True)
 
-    # Seat guard prevents flips during repair/rebalance
     seat_guard = SeatGuard.from_arrays(labels_final, dem_votes, rep_votes, num_districts)
 
-    # 1) strict-ish final contiguity repair (tighter than your initial eps=0.25)
     labels_final = enforce_contiguity_postprocess(
         labels=labels_final,
         weight=weight,
         adj_idx=adj_idx,
         num_districts=num_districts,
-        eps=0.12,              # tighter for final; tune 0.10–0.15
+        eps=0.12,
         max_passes=10,
         enable_bridge=True,
         max_bridge_len=30,
         seat_guard=seat_guard,
     )
 
-    # 2) small population balancing pass (safe single-node moves)
     labels_final = rebalance_population_local(
         labels=labels_final,
         weight=weight,
@@ -281,11 +312,11 @@ def main():
 
     print("[19] postprocess done", flush=True)
 
-    # 6) Export
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    folder_name = f"hillclimb_{args.party}_{run_id}"
-    run_dir = state_outputs_root / folder_name
+    # 9) Write flipbook manifest (after hillclimb frames recorded)
+    manifest_path = rec.write_manifest(fps=FPS, frame_every=FRAME_EVERY)
+    print("Flipbook manifest:", manifest_path, flush=True)
 
+    # 10) Export (uses same run_dir)
     export_run(
         pack_dir=pack_dir,
         pack=pack,
@@ -295,7 +326,6 @@ def main():
     )
 
     _update_latest_manifest(state_outputs_root, f"hillclimb_{args.party}", folder_name)
-
     print("Saved:", run_dir)
 
 

@@ -121,12 +121,23 @@ export default function MapView({
   };
 
   const canvas = useMemo(() => L.canvas({ padding: 0.5 }), []);
+  const geoSig = useMemo(() => {
+    // changes when the run changes; avoids expensive hashing
+    const first = (geojson as any)?.features?.[0]?.properties?.unit_id ?? "";
+    const last = (geojson as any)?.features?.[(geojson as any)?.features?.length - 1]?.properties?.unit_id ?? "";
+    return `${(geojson as any)?.features?.length ?? 0}_${first}_${last}`;
+  }, [geojson]);
+
+  const statsSig = useMemo(() => {
+    // changes when stats map is (re)created
+    return String(statsByDistrict?.size ?? 0);
+  }, [statsByDistrict]);
 
   return (
     <MapContainer
       center={[40.0, -89.0]}
       zoom={6}
-      style={{ height: "100vh", width: "100%" }}
+      style={{ height: "calc(100vh - 56px)", width: "100%" }}
       preferCanvas={true}
     >
       <TileLayer
@@ -138,7 +149,7 @@ export default function MapView({
 
       {/* Precinct fill layer */}
       <GeoJSON
-        key={`precincts_${(geojson as any)?.features?.length ?? 0}_${colorMode}`}
+        key={`precincts_${geoSig}_${colorMode}_${statsSig}`}
         data={geojson as any}
         style={styleFn as any}
         onEachFeature={onEachFeature as any}

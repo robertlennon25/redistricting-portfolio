@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import Sidebar, { DistrictStat } from "../components/Sidebar";
+import LoadingOverlay from "../components/LoadingOverlay";
 
 const MapView = dynamic(() => import("../components/MapView"), { ssr: false });
 
@@ -22,9 +23,10 @@ export default function Home() {
   // ----- NEW: state selection -----
   const [states, setStates] = useState<string[] | null>(null);
   const [stateKey, setStateKey] = useState<string | null>(null);
+  const [isLoadingRun, setIsLoadingRun] = useState(false);
 
   // ----- existing: run + map state -----
-  const [runId, setRunId] = useState("latest_data");
+  const [runId, setRunId] = useState("");
   const [latest, setLatest] = useState<Record<string, string> | null>(null);
 
   const [geojson, setGeojson] = useState<any>(null);
@@ -36,6 +38,25 @@ export default function Home() {
 
   const [showDistrictOutlines, setShowDistrictOutlines] = useState(true);
   const [outlineWeight, setOutlineWeight] = useState(2.5);
+  const summary = useMemo(() => {
+  const rows = stats ?? [];
+    let demDistricts = 0;
+    let repDistricts = 0;
+
+    let demVotes = 0;
+    let repVotes = 0;
+
+    for (const s of rows as any[]) {
+      const winner = String(s.winner ?? "").toLowerCase();
+      if (winner.includes("dem")) demDistricts += 1;
+      else if (winner.includes("rep") || winner.includes("gop")) repDistricts += 1;
+
+      demVotes += Number(s.dem_votes ?? 0);
+      repVotes += Number(s.rep_votes ?? 0);
+    }
+
+  return { demDistricts, repDistricts, demVotes, repVotes };
+}, [stats]);
 
   // 0) Load list of states (outputs/states.json)
   useEffect(() => {
@@ -56,7 +77,7 @@ export default function Home() {
     if (!stateKey) return;
 
     setLatest(null);
-    setRunId("latest_data");
+    setRunId("");
 
     fetch(`/outputs/${stateKey}/latest.json`)
       .then((r) => r.json())
@@ -67,78 +88,87 @@ export default function Home() {
       });
   }, [stateKey]);
 
-  // 2) Build run options from latest.json (state-scoped)
+    // 2) Build run options from latest.json (state-scoped)
   const runs: RunOption[] = useMemo(() => {
-    const baseRuns: RunOption[] = [
-      { id: "latest_data", label: "Legacy Latest (/data)", base: "/data" },
-    ];
-    if (!latest || !stateKey) return baseRuns;
+    if (!latest || !stateKey) return [];
 
     const dynamicRuns: RunOption[] = Object.keys(latest)
       .sort()
       .map((key) => {
-        const folder = latest[key]; // e.g. "kmeans_softcap_20260227_153000"
+        const folder = latest[key];
         return {
           id: key,
           label: `${prettyRunLabel(key)} — latest`,
-          base: folder ? `/outputs/${stateKey}/${folder}` : "/data",
+          base: folder ? `/outputs/${stateKey}/${folder}` : "",
         };
-      });
+      })
+      .filter((r) => !!r.base); // ✅ drop empty/invalid entries
 
-    return baseRuns.concat(dynamicRuns);
+    return dynamicRuns;
   }, [latest, stateKey]);
 
-  // 3) Keep runId valid when manifest loads/changes
+    // 3) Keep runId valid when manifest loads/changes; default to current congress
   useEffect(() => {
     if (!latest) return;
+    if (!runs.length) return;
+
     const ids = new Set(runs.map((r) => r.id));
-    if (!ids.has(runId)) {
-      // pick a reasonable default if exists, else legacy
+
+    if (!runId || !ids.has(runId)) {
       const preferred =
+        (latest["current_congress"] && "current_congress") ||
+        (latest["current_congress_map"] && "current_congress_map") ||
+        (latest["current_map"] && "current_map") ||
         (latest["kmeans_softcap"] && "kmeans_softcap") ||
         (latest["k_means_new"] && "k_means_new") ||
-        (latest["greedy_dem"] && "greedy_dem") ||
-        "latest_data";
+        (latest["hillclimb_dem"] && "hillclimb_dem") ||
+        (latest["hillclimb_rep"] && "hillclimb_rep") ||
+        runs[0].id;
+
       setRunId(preferred);
     }
   }, [latest, runs, runId]);
 
   const selectedRun = runs.find((r) => r.id === runId) ?? runs[0];
-  const base = selectedRun.base;
+  const base = selectedRun?.base ?? "";
 
   // 4) Fetch map + stats + optional outlines whenever base changes (after state chosen)
   useEffect(() => {
-    if (!stateKey) return; // don’t fetch anything until state is chosen
+  if (!stateKey) return;
+  if (!base) return;
 
-    let cancelled = false;
+  let cancelled = false;
 
-    (async () => {
-      setGeojson(null);
-      setStats(null);
-      setDistrictsGeojson(null);
+  (async () => {
+    setIsLoadingRun(true);
+    setGeojson(null);
+    setStats(null);
+    setDistrictsGeojson(null);
 
+    try {
+      const [gj, st] = await Promise.all([
+        fetch(`${base}/map_data.geojson`).then((r) => r.json()),
+        fetch(`${base}/district_stats.json`).then((r) => r.json()),
+      ]);
+      if (cancelled) return;
+      setGeojson(gj);
+      setStats(st);
+      setIsLoadingRun(false);
+    } catch (e) {
+      console.error("Failed to load run from base:", base, e);
+      setIsLoadingRun(false);
+    }
+
+    if (showDistrictOutlines) {
       try {
-        const [gj, st] = await Promise.all([
-          fetch(`${base}/map_data.geojson`).then((r) => r.json()),
-          fetch(`${base}/district_stats.json`).then((r) => r.json()),
-        ]);
+        const dg = await fetch(`${base}/districts.geojson`).then((r) => r.json());
         if (cancelled) return;
-        setGeojson(gj);
-        setStats(st);
+        setDistrictsGeojson(dg);
       } catch (e) {
-        console.error("Failed to load run from base:", base, e);
+        console.warn("No districts.geojson at base (ok):", base);
       }
-
-      if (showDistrictOutlines) {
-        try {
-          const dg = await fetch(`${base}/districts.geojson`).then((r) => r.json());
-          if (cancelled) return;
-          setDistrictsGeojson(dg);
-        } catch (e) {
-          console.warn("No districts.geojson at base (ok):", base);
-        }
-      }
-    })();
+    }
+  })();
 
     return () => {
       cancelled = true;
@@ -205,6 +235,7 @@ export default function Home() {
   // =========================
   return (
     <div style={{ display: "flex", height: "100vh", width: "100%" }}>
+      <LoadingOverlay show={isLoadingRun} label="Loading run…" />
       {/* Sidebar */}
       <div style={{ width: 380, borderRight: "1px solid #eee", padding: 16, overflowY: "auto" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
