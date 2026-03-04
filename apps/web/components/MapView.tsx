@@ -162,7 +162,7 @@ export default function MapView({
           key={`districts_${(districtsGeojson as any)?.features?.length ?? 0}_${outlineWeight}`}
           data={districtsGeojson as any}
           style={districtOutlineStyle as any}
-          renderer={canvas as any}
+          
         />
       ) : null}
     </MapContainer>
