@@ -1,0 +1,155 @@
+[
+  {
+    "district": 0,
+    "dem_votes": 131942.0,
+    "rep_votes": 283689.0,
+    "weight": 882260.0,
+    "winner": "GOP",
+    "margin": -151747.0,
+    "margin_pct": -36.51002932889991
+  },
+  {
+    "district": 1,
+    "dem_votes": 180116.0,
+    "rep_votes": 113135.0,
+    "weight": 623951.0,
+    "winner": "Dem",
+    "margin": 66981.0,
+    "margin_pct": 22.840842827475438
+  },
+  {
+    "district": 2,
+    "dem_votes": 97076.0,
+    "rep_votes": 274314.0,
+    "weight": 853041.0,
+    "winner": "GOP",
+    "margin": -177238.0,
+    "margin_pct": -47.7228789143488
+  },
+  {
+    "district": 3,
+    "dem_votes": 232047.0,
+    "rep_votes": 150969.0,
+    "weight": 865825.0,
+    "winner": "Dem",
+    "margin": 81078.0,
+    "margin_pct": 21.16830628485494
+  },
+  {
+    "district": 4,
+    "dem_votes": 299808.0,
+    "rep_votes": 87844.0,
+    "weight": 936659.0,
+    "winner": "Dem",
+    "margin": 211964.0,
+    "margin_pct": 54.678938842054215
+  },
+  {
+    "district": 5,
+    "dem_votes": 236310.0,
+    "rep_votes": 155373.0,
+    "weight": 956871.0,
+    "winner": "Dem",
+    "margin": 80937.0,
+    "margin_pct": 20.66390422867472
+  },
+  {
+    "district": 6,
+    "dem_votes": 202053.0,
+    "rep_votes": 49794.0,
+    "weight": 901354.0,
+    "winner": "Dem",
+    "margin": 152259.0,
+    "margin_pct": 60.45694409701128
+  },
+  {
+    "district": 7,
+    "dem_votes": 93364.0,
+    "rep_votes": 104359.0,
+    "weight": 445397.0,
+    "winner": "GOP",
+    "margin": -10995.0,
+    "margin_pct": -5.560809819798405
+  },
+  {
+    "district": 8,
+    "dem_votes": 229745.0,
+    "rep_votes": 43778.0,
+    "weight": 834431.0,
+    "winner": "Dem",
+    "margin": 185967.0,
+    "margin_pct": 67.98952921692143
+  },
+  {
+    "district": 9,
+    "dem_votes": 249428.0,
+    "rep_votes": 142250.0,
+    "weight": 940586.0,
+    "winner": "Dem",
+    "margin": 107178.0,
+    "margin_pct": 27.363803940992348
+  },
+  {
+    "district": 10,
+    "dem_votes": 197457.0,
+    "rep_votes": 176111.0,
+    "weight": 805958.0,
+    "winner": "Dem",
+    "margin": 21346.0,
+    "margin_pct": 5.714086859688196
+  },
+  {
+    "district": 11,
+    "dem_votes": 90961.0,
+    "rep_votes": 112555.0,
+    "weight": 448730.0,
+    "winner": "GOP",
+    "margin": -21594.0,
+    "margin_pct": -10.610467973034062
+  },
+  {
+    "district": 12,
+    "dem_votes": 137607.0,
+    "rep_votes": 232980.0,
+    "weight": 885911.0,
+    "winner": "GOP",
+    "margin": -95373.0,
+    "margin_pct": -25.735657214095475
+  },
+  {
+    "district": 13,
+    "dem_votes": 98085.0,
+    "rep_votes": 115271.0,
+    "weight": 467111.0,
+    "winner": "GOP",
+    "margin": -17186.0,
+    "margin_pct": -8.055081647574944
+  },
+  {
+    "district": 14,
+    "dem_votes": 105454.0,
+    "rep_votes": 241958.0,
+    "weight": 819657.0,
+    "winner": "GOP",
+    "margin": -136504.0,
+    "margin_pct": -39.29167674116035
+  },
+  {
+    "district": 15,
+    "dem_votes": 100006.0,
+    "rep_votes": 166417.0,
+    "weight": 565312.0,
+    "winner": "GOP",
+    "margin": -66411.0,
+    "margin_pct": -24.9269019566629
+  },
+  {
+    "district": 16,
+    "dem_votes": 147710.0,
+    "rep_votes": 66587.0,
+    "weight": 577732.0,
+    "winner": "Dem",
+    "margin": 81123.0,
+    "margin_pct": 37.855406281935814
+  }
+]

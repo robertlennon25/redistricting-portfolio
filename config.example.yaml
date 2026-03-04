@@ -1,0 +1,13 @@
+data:
+  precinct_shapefile_path: "/ABSOLUTE/PATH/TO/YOUR/precinct_votes.shp"
+  unit_id_col: "UNIQUE_ID"
+  crs_epsg: 3857
+
+paths:
+  assets_dir: "assets/il2024_precincts"
+  out_dir: "outputs"
+  public_outputs_dir: "apps/web/public/outputs"
+
+run:
+  num_districts: 17
+  pop_tolerance: 0.05

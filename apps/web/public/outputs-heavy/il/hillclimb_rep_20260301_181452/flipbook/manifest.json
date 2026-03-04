@@ -1,0 +1,324 @@
+{
+  "state": "il",
+  "title": "Hillclimb (REP) [il]",
+  "fps": 12,
+  "frame_every": 5,
+  "frames_dir": "frames",
+  "frames": [
+    {
+      "frame": "frame_000000.png",
+      "step": 0,
+      "seats": 7,
+      "closest_loss": -40530.0,
+      "objective": -33540620.61,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000001.png",
+      "step": 0,
+      "seats": 7,
+      "closest_loss": -39948.0,
+      "objective": -32958620.61,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000002.png",
+      "step": 5,
+      "seats": 7,
+      "closest_loss": -37116.0,
+      "objective": -30126620.61,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000003.png",
+      "step": 10,
+      "seats": 7,
+      "closest_loss": -34576.0,
+      "objective": -27586620.61,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000004.png",
+      "step": 15,
+      "seats": 7,
+      "closest_loss": -32447.0,
+      "objective": -25457620.61,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000005.png",
+      "step": 20,
+      "seats": 7,
+      "closest_loss": -30702.0,
+      "objective": -23712620.61,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000006.png",
+      "step": 25,
+      "seats": 7,
+      "closest_loss": -29278.0,
+      "objective": -22288620.61,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000007.png",
+      "step": 30,
+      "seats": 7,
+      "closest_loss": -28058.0,
+      "objective": -21068618.35,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000008.png",
+      "step": 35,
+      "seats": 7,
+      "closest_loss": -26824.0,
+      "objective": -19834618.35,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000009.png",
+      "step": 40,
+      "seats": 7,
+      "closest_loss": -25737.0,
+      "objective": -18747616.3,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000010.png",
+      "step": 45,
+      "seats": 7,
+      "closest_loss": -24584.0,
+      "objective": -17594616.3,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000011.png",
+      "step": 50,
+      "seats": 7,
+      "closest_loss": -23577.0,
+      "objective": -16587608.14,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000012.png",
+      "step": 55,
+      "seats": 7,
+      "closest_loss": -22727.0,
+      "objective": -15737599.64,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000013.png",
+      "step": 60,
+      "seats": 7,
+      "closest_loss": -20069.0,
+      "objective": -13079573.06,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000014.png",
+      "step": 65,
+      "seats": 7,
+      "closest_loss": -18068.0,
+      "objective": -11078553.05,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000015.png",
+      "step": 70,
+      "seats": 7,
+      "closest_loss": -14104.0,
+      "objective": -7114513.41,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000016.png",
+      "step": 75,
+      "seats": 7,
+      "closest_loss": -10326.0,
+      "objective": -3336475.63,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000017.png",
+      "step": 80,
+      "seats": 7,
+      "closest_loss": -7071.0,
+      "objective": -81443.08,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000018.png",
+      "step": 85,
+      "seats": 7,
+      "closest_loss": -3785.0,
+      "objective": 3204589.78,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000019.png",
+      "step": 90,
+      "seats": 7,
+      "closest_loss": -526.0,
+      "objective": 6463622.37,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000020.png",
+      "step": 95,
+      "seats": 7,
+      "closest_loss": 0.0,
+      "objective": 6989633.61,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000021.png",
+      "step": 100,
+      "seats": 7,
+      "closest_loss": 0.0,
+      "objective": 6989663.79,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000022.png",
+      "step": 105,
+      "seats": 8,
+      "closest_loss": -44563.0,
+      "objective": -36573330.13,
+      "locked": 1,
+      "note": "Flip(s): 0"
+    },
+    {
+      "frame": "frame_000023.png",
+      "step": 110,
+      "seats": 8,
+      "closest_loss": -43051.0,
+      "objective": -35061330.13,
+      "locked": 1,
+      "note": ""
+    },
+    {
+      "frame": "frame_000024.png",
+      "step": 115,
+      "seats": 8,
+      "closest_loss": -41735.0,
+      "objective": -33745330.13,
+      "locked": 1,
+      "note": ""
+    },
+    {
+      "frame": "frame_000025.png",
+      "step": 120,
+      "seats": 8,
+      "closest_loss": -40485.0,
+      "objective": -32495330.13,
+      "locked": 1,
+      "note": ""
+    },
+    {
+      "frame": "frame_000026.png",
+      "step": 125,
+      "seats": 8,
+      "closest_loss": -39179.0,
+      "objective": -31189323.95,
+      "locked": 1,
+      "note": ""
+    },
+    {
+      "frame": "frame_000027.png",
+      "step": 130,
+      "seats": 8,
+      "closest_loss": -38091.0,
+      "objective": -30101317.36,
+      "locked": 1,
+      "note": ""
+    },
+    {
+      "frame": "frame_000028.png",
+      "step": 135,
+      "seats": 8,
+      "closest_loss": -36670.0,
+      "objective": -28680317.36,
+      "locked": 1,
+      "note": ""
+    },
+    {
+      "frame": "frame_000029.png",
+      "step": 140,
+      "seats": 8,
+      "closest_loss": -35536.0,
+      "objective": -27546315.29,
+      "locked": 1,
+      "note": ""
+    },
+    {
+      "frame": "frame_000030.png",
+      "step": 145,
+      "seats": 8,
+      "closest_loss": -34389.0,
+      "objective": -26399315.29,
+      "locked": 1,
+      "note": ""
+    },
+    {
+      "frame": "frame_000031.png",
+      "step": 150,
+      "seats": 8,
+      "closest_loss": -33198.0,
+      "objective": -25208315.29,
+      "locked": 1,
+      "note": ""
+    },
+    {
+      "frame": "frame_000032.png",
+      "step": 155,
+      "seats": 8,
+      "closest_loss": -32205.0,
+      "objective": -24215313.35,
+      "locked": 1,
+      "note": ""
+    },
+    {
+      "frame": "frame_000033.png",
+      "step": 160,
+      "seats": 8,
+      "closest_loss": -31337.0,
+      "objective": -23347311.49,
+      "locked": 1,
+      "note": ""
+    },
+    {
+      "frame": "frame_000034.png",
+      "step": 165,
+      "seats": 8,
+      "closest_loss": -30494.0,
+      "objective": -22504306.24,
+      "locked": 1,
+      "note": ""
+    }
+  ]
+}
