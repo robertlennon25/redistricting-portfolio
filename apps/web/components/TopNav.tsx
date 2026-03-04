@@ -7,6 +7,7 @@ const items: NavItem[] = [
   { href: "/", label: "Map" },
   { href: "/in-action", label: "View Redistricting In Action" },
   { href: "/about", label: "About" },
+  { href: "hex-demo", label: "See a Simple Example"}
 ];
 
 export default function TopNav() {

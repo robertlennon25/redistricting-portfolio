@@ -1,0 +1,36 @@
+{
+  "state": "il",
+  "title": "Hillclimb (DEM) [il]",
+  "fps": 12,
+  "frame_every": 5,
+  "frames_dir": "frames",
+  "frames": [
+    {
+      "frame": "frame_000000.png",
+      "step": 0,
+      "seats": 10,
+      "closest_loss": -66705.0,
+      "objective": -56712502.76,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000001.png",
+      "step": 0,
+      "seats": 10,
+      "closest_loss": -65672.0,
+      "objective": -55679502.76,
+      "locked": 0,
+      "note": ""
+    },
+    {
+      "frame": "frame_000002.png",
+      "step": 5,
+      "seats": 10,
+      "closest_loss": -61542.0,
+      "objective": -51549486.93,
+      "locked": 0,
+      "note": ""
+    }
+  ]
+}

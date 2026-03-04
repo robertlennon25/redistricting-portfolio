@@ -1,353 +1,585 @@
-# Illinois Redistricting Algorithm Demo
+=======
+# Redistricting Portfolio
+
+An interactive **algorithmic redistricting research project** that generates district maps, optimizes them using heuristic algorithms, evaluates their political properties, and visualizes the results through a **Next.js interactive web application**.
+
+This repository contains:
+
+- A **Python backend** for generating and optimizing district maps
+- A **data pipeline** for converting precinct shapefiles into fast algorithm-ready map packs
+- Multiple **redistricting algorithms** (K-Means, hillclimb optimization, etc.)
+- Automated **export pipelines** for producing GeoJSON and statistics
+- A **Next.js frontend** that allows users to explore maps and watch the algorithm evolve in a flipbook animation
+
+The goal is to demonstrate how algorithmic redistricting works and provide a platform for experimenting with optimization approaches.
 
 ---
 
-# 1) Objective and Data Source
-
-## Project Objective
-
-This project explores algorithmic approaches to drawing U.S. congressional district maps under the following constraints:
-
-- Equal (or near-equal) population per district  
-- Contiguity (each district must form a connected region)  
-- Optimization of partisan outcomes (maximize seats for a selected party)
-
-The goal is to build a flexible experimental framework where different redistricting algorithms can be implemented, tested, visualized, and compared through a web interface.
-
-This is a research/demo environment — not a production or legally compliant redistricting system.
-
----
-
-## Data Sources
-
-### Election Precinct Data
-
-Illinois 2024 General Election precinct-level results and boundaries were sourced from:
-
-Redistricting Data Hub (RDH):  
-https://redistrictingdatahub.org
-
-The dataset includes:
-
-- Precinct geometries
-- Congressional vote totals (Democrat, Republican)
-- Unique precinct identifiers
-
-### Census Population Data
-
-Population data is derived from:
-
-2020 Census PL 94-171 Redistricting Data (Block-level)
-
-We spatially join Census blocks to precincts and aggregate total population (`P0010001`) to compute:
-
-- `TOTPOP` (total population per precinct)
-
-This ensures population equality constraints are based on Census population, not vote totals.
-
----
-
-# 2) Algorithms Used and Why
-
-We currently support two algorithm families:
-
----
-
-## Greedy (Baseline)
-
-### Purpose
-A fast heuristic for building districts by expanding regions from seed nodes.
-
-### Structure
-1. Seed selection
-2. Region growth under population constraints
-3. Optional contiguity repair
-4. Optional population balancing
-
-### Strengths
-- Simple
-- Fast
-- Easy to reason about
-
-### Weaknesses
-- Does not robustly enforce contiguity
-- Can get stuck in poor local configurations
-- Limited seat optimization
-
----
-
-## smartA (Seeded Growth + Simulated Annealing)
-
-### Purpose
-A more advanced approach that:
-
-1. Constructs a valid initial map (population-balanced + contiguous-ish)
-2. Optimizes partisan seat outcomes via boundary swaps
-3. Uses simulated annealing to escape local optima
-
-### Key Concepts
-
-- Seeded region growing
-- Boundary precinct detection
-- Connectivity checks before removal
-- Population constraint enforcement
-- Sigmoid-based seat objective
-- Optional anti-waste penalty
-- Optional paired swaps
-- Annealing temperature schedule
-
-### Why This Approach?
-
-Seat maximization is a discontinuous objective (crossing 50% matters).  
-Simulated annealing provides:
-
-- Local improvement
-- Escape from local minima
-- Exploration early, refinement late
-
-This structure is closer to real-world redistricting heuristics.
-
----
-
-# 3) Chronological: How to Run the System
-
-This section explains how a developer should use the pipeline from raw data to frontend.
-
----
-
-## Step 0 — Folder Structure
-
-Raw datasets should be stored in:
+# Project Architecture
 
 ```
-/raw-data/
+redistricting/
+│
+├── gerry/                  # Core Python library
+│   ├── algos/              # Districting algorithms
+│   ├── data/               # Map pack loader utilities
+│   ├── viz/                # Frame recorder (flipbook generator)
+│
+├── scripts/                # CLI entrypoints for running algorithms
+│   ├── build_map_pack.py
+│   ├── run_kmeans_pack.py
+│   ├── run_hillclimber.py
+│
+├── raw-data/               # Source shapefiles and precinct datasets
+│
+├── apps/web/               # Next.js frontend
+│   ├── pages/
+│   ├── components/
+│   ├── public/outputs/     # Exported maps used by the frontend
+│
+└── config.yaml             # Configuration file controlling algorithms
 ```
 
-Recommended structure:
+The repository is divided into two major layers:
+
+### Backend (Python)
+
+Responsible for:
+
+- ingesting shapefiles
+- constructing adjacency graphs
+- generating district assignments
+- optimizing district configurations
+- exporting data to files consumed by the frontend
+
+### Frontend (Next.js)
+
+Responsible for:
+
+- loading precomputed runs
+- rendering maps with Leaflet
+- displaying district statistics
+- visualizing algorithm progress
+
+---
+
+# Data Pipeline Overview
+
+The redistricting workflow follows this pipeline:
 
 ```
-raw-data/
-  il_2024_gen_prec/
-    il_2024_gen_cong_prec.shp
-  il_pl2020_blocks/
-    il_pl2020_p1_b.shp
+Precinct shapefile
+      │
+      ▼
+build_map_pack.py
+      │
+      ▼
+Map Pack (algorithm-ready data)
+      │
+      ▼
+Districting algorithm
+      │
+      ▼
+Export run
+      │
+      ▼
+GeoJSON + statistics
+      │
+      ▼
+Next.js frontend
 ```
 
-After spatially joining population:
+Each stage is described below.
+
+---
+
+# 1. Raw Input Data
+
+The system begins with a **precinct-level shapefile** containing:
+
+Required columns:
+
+| Column | Description |
+|------|-------------|
+| `unit_id` | Unique precinct identifier |
+| `dem_votes` | Democratic vote count |
+| `rep_votes` | Republican vote count |
+| `weight` | Population or voting population |
+| `geometry` | Polygon or MultiPolygon |
+
+Example:
 
 ```
-il_2024_gen_cong_prec_with_pop.gpkg
+unit_id: "BOONE-:-FLORA 1-(CONG-11)"
+dem_votes: 263
+rep_votes: 240
+weight: 503
+geometry: Polygon(...)
+```
+
+These datasets are stored under:
+
+```
+raw-data/<state>_precincts/
+>>>>>>> clean-deploy
 ```
 
 ---
 
-## Step 1 — Build Map Pack
+# 2. Map Pack Construction
+
+The **map pack** converts raw shapefiles into a format optimized for algorithms.
 
 Run:
 
 ```
-python3 scripts/build_map_pack.py --config config.yaml
+python scripts/build_map_pack.py --config config.yaml --state il
 ```
 
-### What build_map_pack Does
-
-- Reads precinct geometry file (.shp or .gpkg)
-- Detects Dem/Rep vote columns dynamically
-- Uses `weight_col` (e.g., `TOTPOP`) as population weight
-- Computes centroids
-- Builds adjacency graph (touch-based)
-- Creates ID ↔ index mappings
-
-### Output Location
+This produces:
 
 ```
-assets/<pack_name>/
+assets/<state>_precincts/
+│
+├── attributes.csv
+├── adjacency.json
+├── shapes.geojson
+├── id_to_idx.json
 ```
 
-### Files Created
+## attributes.csv
 
-- `shapes.geojson`
-- `attributes.csv`
-- `adjacency.json`
-- `id_to_idx.json`
-- `idx_to_id.json`
-- `meta.json`
+Contains algorithm inputs:
 
-This directory is called the **Map Pack**.
+| column | meaning |
+|------|---------|
+| unit_id | precinct identifier |
+| weight | population |
+| dem_votes | democratic votes |
+| rep_votes | republican votes |
+| centroid_x | geometry centroid |
+| centroid_y | geometry centroid |
 
-It is the static representation of the geographic problem.
-
----
-
-## Step 2 — Run an Algorithm
-
-### Greedy (example)
+Example:
 
 ```
-python3 scripts/run_greedy_pack_v2.py --config config.yaml --maximize dem
-```
-
-### Custom smartA
-
-```
-python3 scripts/run_custom_algo.py --config config.yaml --algo_key smartA --maximize dem
+unit_id,weight,dem_votes,rep_votes,centroid_x,centroid_y
+BOONE-:-FLORA 1-(CONG-11),503,263,240,-88.85,42.24
 ```
 
 ---
 
-### What the Runner Does
+## adjacency.json
 
-The runner:
+Precinct adjacency graph:
 
-1. Loads the Map Pack
-2. Calls the algorithm’s `run(pack, cfg, maximize)` function
-3. Receives `labels` (district assignments)
-4. Exports frontend-ready files
-5. Updates `apps/web/public/outputs/latest.json`
+```
+{
+  "precinct_id": ["neighbor1","neighbor2","neighbor3"]
+}
+```
+
+Used to enforce **contiguity constraints**.
 
 ---
 
-## Step 3 — Output Files
+## shapes.geojson
 
-Each run creates a timestamped directory:
+Contains the original precinct geometries used for visualization.
+
+---
+
+## id_to_idx.json
+
+Maps precinct IDs to numeric indices for fast NumPy operations.
+
+Example:
 
 ```
-apps/web/public/outputs/<algo_key>_<maximize>_<timestamp>/
+{
+  "BOONE-:-FLORA 1-(CONG-11)": 0,
+  "COOK-:-7700013-(CONG-11)": 1
+}
+```
+
+---
+
+# 3. Running Algorithms
+
+Once the map pack exists, algorithms can be executed.
+
+## K-Means Baseline
+
+```
+python scripts/run_kmeans_pack.py --config config.yaml --state il
+```
+
+Generates a population-balanced clustering using a soft capacity constraint.
+
+---
+
+## Hillclimb Optimization
+
+```
+python scripts/run_hillclimber.py --config config.yaml --state il --party dem
+```
+
+The hillclimber:
+
+- starts from a K-means map
+- performs boundary swaps
+- maximizes the number of seats for a target party
+- preserves:
+  - population balance
+  - district contiguity
+  - seat stability constraints
+
+Key features:
+
+- tabu memory to prevent oscillations
+- narrow-win district locking
+- swap-assist moves for near ties
+- cycle detection
+
+---
+
+# 4. Exporting Results
+
+Each algorithm run creates an output folder:
+
+```
+apps/web/public/outputs/<state>/<run_name>/
 ```
 
 Example:
 
 ```
-apps/web/public/outputs/smartA_dem_20260226_214512/
+outputs/il/hillclimb_dem_20260301_190700/
 ```
 
-Files written:
+Contents:
 
-- `map_data.geojson`
-- `districts.geojson`
-- `district_stats.json`
-- `district_stats.csv`
-- `map.png`
-- `unit_to_district.csv`
+```
+map_data.geojson
+districts.geojson
+district_stats.json
+unit_to_district.csv
+flipbook/
+```
 
-The `latest.json` manifest maps:
+---
+
+## map_data.geojson
+
+Precinct-level GeoJSON including district assignments.
+
+Example properties:
 
 ```
 {
-  "smartA_dem": "smartA_dem_20260226_214512",
-  "smartA_rep": "smartA_rep_20260226_214530"
+ "unit_id": "...",
+ "district": 10,
+ "dem_votes": 263,
+ "rep_votes": 240,
+ "weight": 503,
+ "district_dem": 143664,
+ "district_rep": 179018,
+ "district_weight": 322682,
+ "district_winner": "GOP",
+ "district_margin": -35354,
+ "district_margin_pct": -10.95
 }
 ```
 
-The frontend reads this file dynamically.
+This file drives the **frontend map rendering**.
 
 ---
 
-## Step 4 — Run Frontend
+## districts.geojson
 
-From:
+District boundaries created by dissolving precincts.
+
+Used to render bold district outlines.
+
+---
+
+## district_stats.json
+
+Aggregated statistics per district:
 
 ```
-apps/web/
+{
+  "district": 5,
+  "dem_votes": 312000,
+  "rep_votes": 280000,
+  "weight": 592000,
+  "winner": "Dem",
+  "margin": 32000,
+  "margin_pct": 5.4
+}
 ```
 
-Run:
+---
+
+## unit_to_district.csv
+
+Mapping between precincts and districts:
 
 ```
-npm install
+unit_id,district
+BOONE-:-FLORA 1-(CONG-11),10
+...
+```
+
+Useful for downstream analysis or exporting to other tools.
+
+---
+
+# 5. Flipbook Generation
+
+The hillclimber optionally records frames of the algorithm.
+
+Frames are generated using:
+
+```
+FrameRecorder
+```
+
+Output:
+
+```
+flipbook/
+│
+├── frames/
+│   ├── frame_000000.png
+│   ├── frame_000005.png
+│   ├── frame_000010.png
+│
+└── manifest.json
+```
+
+---
+
+## manifest.json
+
+Example:
+
+```
+{
+  "state": "il",
+  "title": "Hillclimb (DEM)",
+  "fps": 12,
+  "frame_every": 5,
+  "frames": [...]
+}
+```
+
+Used by the frontend flipbook viewer.
+
+---
+
+# Frontend
+
+The frontend is a **Next.js application**.
+
+Location:
+
+```
+apps/web
+```
+
+It uses:
+
+- React
+- Leaflet
+- GeoJSON rendering
+
+---
+
+# Frontend Pages
+
+### Map Page
+
+Displays district maps with:
+
+- rainbow or party coloring
+- district hover tooltips
+- vote totals
+- district statistics
+
+Users can:
+
+- switch between algorithm runs
+- toggle outlines
+- inspect district-level results
+
+---
+
+### Redistricting In Action
+
+Displays algorithm progression:
+
+- frame slider
+- play/pause animation
+- step metadata
+- explanatory text
+
+Frames are loaded from:
+
+```
+/outputs/<state>/<run>/flipbook
+```
+
+---
+
+### About Page
+
+Explains:
+
+- algorithm design
+- redistricting concepts
+- fairness metrics
+- project goals
+
+---
+
+# Adding New Algorithms
+
+To integrate a new algorithm:
+
+1. Implement in:
+
+```
+gerry/algos/
+```
+
+2. Create a script:
+
+```
+scripts/run_<algorithm>.py
+```
+
+3. Export results using:
+
+```
+export_run()
+```
+
+which writes:
+
+```
+map_data.geojson
+district_stats.json
+districts.geojson
+```
+
+4. Update:
+
+```
+outputs/<state>/latest.json
+```
+
+so the frontend discovers the run.
+
+---
+
+# Example Workflow
+
+```
+# Build map pack
+python scripts/build_map_pack.py --state il
+
+# Run kmeans baseline
+python scripts/run_kmeans_pack.py --state il
+
+# Run hillclimb optimizer
+python scripts/run_hillclimber.py --state il --party dem
+
+# Start frontend
+cd apps/web
 npm run dev
 ```
 
-The frontend:
+---
 
-1. Fetches `/outputs/latest.json`
-2. Populates dropdown with algorithm keys
-3. Fetches:
-   - `map_data.geojson`
-   - `district_stats.json`
-   - `districts.geojson`
-4. Renders interactive Leaflet map
-5. Displays sidebar district stats
+# Key Concepts
 
-No backend server is required — all outputs are static files.
+### Contiguity
+
+Ensured using adjacency graph checks during moves.
+
+### Population Balance
+
+Each district must remain within a tolerance of:
+
+```
+ideal_population = total_population / num_districts
+```
+
+### Seat Optimization
+
+Objective function:
+
+```
+seat_weight * seats
++ flip_weight * closest_loss_margin
++ loss_weight * total_losing_margin
+```
+
+This encourages:
+
+- maximizing seats
+- flipping near losses
+- improving margins
 
 ---
 
-# 4) Current Known Bugs and Limitations
+# Deployment
 
-This is an experimental framework.
+The frontend can be deployed to **Vercel**.
 
-Current issues include:
+Important:
 
-## 1. Contiguity Not Fully Enforced
+Only a subset of runs should be included in:
 
-- Phase 1 fallback assignments may break contiguity.
-- Connectivity checks are local (removal-based) and may miss global fragmentation.
-- No final global contiguity verification pass.
+```
+apps/web/public/outputs/
+```
 
-## 2. Population Locking
+to avoid large repository sizes.
 
-- Tight tolerance can prevent legal swaps.
-- Annealing may freeze if no feasible moves exist.
+Typically include:
 
-## 3. Objective Symmetry
-
-- Dem and GOP runs can converge to identical maps if:
-  - Annealing fails to explore
-  - Phase 1 dominates solution
-  - Vote signal is weak relative to constraints
-
-## 4. No Compactness Constraint
-
-Version A intentionally ignores shape quality.
-
-Future versions may include:
-
-- Perimeter penalties
-- Polsby-Popper compactness
-- Dispersion penalties
-
-## 5. Performance
-
-- Connectivity checks are O(V+E) per move.
-- Large iteration counts may slow execution.
-- Boundary sampling strategy may require optimization.
+```
+current_congress
+kmeans
+hillclimb runs
+flipbooks
+```
 
 ---
 
-# 5) Credits
+# Future Improvements
 
-- Redistricting Data Hub (RDH)  
-  https://redistrictingdatahub.org  
-  Precinct boundaries and election data.
+Potential extensions:
 
-- U.S. Census Bureau  
-  2020 PL 94-171 Redistricting Data (Block-level population)
-
-- Python libraries:
-  - GeoPandas
-  - Shapely
-  - NumPy
-  - Matplotlib
+- fairness metrics
+- compactness scores
+- efficiency gap
+- simulated annealing optimizer
+- reinforcement learning district generator
+- server-side map streaming
+- WebGL rendering for large states
 
 ---
 
-# Final Notes
+# License
 
-This project is an algorithmic sandbox for exploring redistricting under legal constraints.
+MIT License.
 
-The system is modular:
+---
 
-- Map Pack layer = static geographic representation
-- Algorithm layer = experimental redistricting logic
-- Runner layer = I/O + manifest handling
-- Frontend layer = static visualization
+# Author
 
-New algorithms can be added by:
-
-1. Creating a new file in `src/gerry/algos/`
-2. Implementing `run(pack, cfg, maximize)`
-3. Running via `scripts/run_custom_algo.py`
-4. Viewing results immediately in the web UI
-
-This structure enables rapid iteration and comparative experimentation between algorithm families.
+Robert Lennon  
+Brown University — Computer Science
