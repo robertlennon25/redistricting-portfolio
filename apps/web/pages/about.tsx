@@ -313,7 +313,7 @@ export default function AboutPage() {
             </div>
 
             <div style={{ marginTop: 10, opacity: 0.7, fontSize: 13 }}>
-              Placeholders: <code>/public/about/hillclimb_1.png</code> … <code>hillclimb_4.png</code>
+              Frames from the hillclimb algorithm for Democrats in New York.
             </div>
           </div>
         </div>
