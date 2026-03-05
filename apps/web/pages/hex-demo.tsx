@@ -1125,10 +1125,6 @@ export default function FairnessPage() {
           <b>Contiguity:</b> Every district is grown by repeatedly adding neighboring hexes, so districts stay contiguous
           in both Pack and Crack.
         </p>
-        <p style={{ marginTop: 0 }}>
-          <b>Bold outlines:</b> We draw only true boundary edges between different districts, so the outlines stay crisp
-          (not “fat hex borders everywhere”), and they appear progressively as the plan is drawn.
-        </p>
       </div>
     </div>
   );

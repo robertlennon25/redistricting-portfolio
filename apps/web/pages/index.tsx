@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Sidebar, { DistrictStat } from "../components/Sidebar";
 import LoadingOverlay from "../components/LoadingOverlay";
@@ -38,11 +40,51 @@ export default function Home() {
 
   const [showDistrictOutlines, setShowDistrictOutlines] = useState(true);
   const [outlineWeight, setOutlineWeight] = useState(2.5);
+
+  // =========================
+  // RESIZABLE SIDEBAR (THIS IS THE SLIDER)
+  // =========================
+  const draggingRef = useRef(false);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    // safe for SSR, but we're a client component anyway
+    if (typeof window === "undefined") return 380;
+    const raw = window.localStorage.getItem("runs_sidebar_width");
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) ? n : 380;
+  });
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("runs_sidebar_width", String(sidebarWidth));
+    }
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (!draggingRef.current) return;
+      const next = Math.max(280, Math.min(680, e.clientX));
+      setSidebarWidth(next);
+    }
+
+    function onUp() {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
+
   const summary = useMemo(() => {
-  const rows = stats ?? [];
+    const rows = stats ?? [];
     let demDistricts = 0;
     let repDistricts = 0;
-
     let demVotes = 0;
     let repVotes = 0;
 
@@ -55,8 +97,8 @@ export default function Home() {
       repVotes += Number(s.rep_votes ?? 0);
     }
 
-  return { demDistricts, repDistricts, demVotes, repVotes };
-}, [stats]);
+    return { demDistricts, repDistricts, demVotes, repVotes };
+  }, [stats]);
 
   // 0) Load list of states (outputs/states.json)
   useEffect(() => {
@@ -88,7 +130,7 @@ export default function Home() {
       });
   }, [stateKey]);
 
-    // 2) Build run options from latest.json (state-scoped)
+  // 2) Build run options from latest.json (state-scoped)
   const runs: RunOption[] = useMemo(() => {
     if (!latest || !stateKey) return [];
 
@@ -102,12 +144,12 @@ export default function Home() {
           base: folder ? `/outputs/${stateKey}/${folder}` : "",
         };
       })
-      .filter((r) => !!r.base); // ✅ drop empty/invalid entries
+      .filter((r) => !!r.base);
 
     return dynamicRuns;
   }, [latest, stateKey]);
 
-    // 3) Keep runId valid when manifest loads/changes; default to current congress
+  // 3) Keep runId valid when manifest loads/changes; default to current congress
   useEffect(() => {
     if (!latest) return;
     if (!runs.length) return;
@@ -134,41 +176,41 @@ export default function Home() {
 
   // 4) Fetch map + stats + optional outlines whenever base changes (after state chosen)
   useEffect(() => {
-  if (!stateKey) return;
-  if (!base) return;
+    if (!stateKey) return;
+    if (!base) return;
 
-  let cancelled = false;
+    let cancelled = false;
 
-  (async () => {
-    setIsLoadingRun(true);
-    setGeojson(null);
-    setStats(null);
-    setDistrictsGeojson(null);
+    (async () => {
+      setIsLoadingRun(true);
+      setGeojson(null);
+      setStats(null);
+      setDistrictsGeojson(null);
 
-    try {
-      const [gj, st] = await Promise.all([
-        fetch(`${base}/map_data.geojson`).then((r) => r.json()),
-        fetch(`${base}/district_stats.json`).then((r) => r.json()),
-      ]);
-      if (cancelled) return;
-      setGeojson(gj);
-      setStats(st);
-      setIsLoadingRun(false);
-    } catch (e) {
-      console.error("Failed to load run from base:", base, e);
-      setIsLoadingRun(false);
-    }
-
-    if (showDistrictOutlines) {
       try {
-        const dg = await fetch(`${base}/districts.geojson`).then((r) => r.json());
+        const [gj, st] = await Promise.all([
+          fetch(`${base}/map_data.geojson`).then((r) => r.json()),
+          fetch(`${base}/district_stats.json`).then((r) => r.json()),
+        ]);
         if (cancelled) return;
-        setDistrictsGeojson(dg);
+        setGeojson(gj);
+        setStats(st);
+        setIsLoadingRun(false);
       } catch (e) {
-        console.warn("No districts.geojson at base (ok):", base);
+        console.error("Failed to load run from base:", base, e);
+        setIsLoadingRun(false);
       }
-    }
-  })();
+
+      if (showDistrictOutlines) {
+        try {
+          const dg = await fetch(`${base}/districts.geojson`).then((r) => r.json());
+          if (cancelled) return;
+          setDistrictsGeojson(dg);
+        } catch (e) {
+          console.warn("No districts.geojson at base (ok):", base);
+        }
+      }
+    })();
 
     return () => {
       cancelled = true;
@@ -199,9 +241,7 @@ export default function Home() {
     return (
       <div style={{ padding: 24, maxWidth: 920, margin: "0 auto" }}>
         <h2 style={{ marginBottom: 6 }}>Gerrymandering Demo</h2>
-        <p style={{ marginTop: 0, opacity: 0.8 }}>
-          Choose a state to load its precomputed runs.
-        </p>
+        <p style={{ marginTop: 0, opacity: 0.8 }}>Choose a state to load its precomputed runs.</p>
 
         {!states ? (
           <div style={{ padding: 12 }}>Loading states…</div>
@@ -234,10 +274,21 @@ export default function Home() {
   // UI: main app after state chosen
   // =========================
   return (
-    <div style={{ display: "flex", height: "100vh", width: "100%" }}>
+    <div style={{ display: "flex", height: "100vh", width: "100%", overflow: "hidden" }}>
       <LoadingOverlay show={isLoadingRun} label="Loading run…" />
+
       {/* Sidebar */}
-      <div style={{ width: 380, borderRight: "1px solid #eee", padding: 16, overflowY: "auto" }}>
+      <div
+        style={{
+          width: sidebarWidth,
+          minWidth: 280,
+          maxWidth: 680,
+          borderRight: "1px solid #eee",
+          padding: 16,
+          overflowY: "auto",
+          flex: "0 0 auto",
+        }}
+      >
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button
             onClick={resetToStateSelect}
@@ -319,19 +370,53 @@ export default function Home() {
           <div style={{ fontSize: 12, opacity: 0.8 }}>
             Fetching from: <code>{base}</code>
           </div>
+
+          {/* Optional: quick summary (you had a summary useMemo; leaving here if you want) */}
+          <div style={{ fontSize: 12, opacity: 0.8 }}>
+            Seats: <b style={{ color: "#2b6fff" }}>{summary.demDistricts} D</b>{" "}
+            / <b style={{ color: "#ff3b3b" }}>{summary.repDistricts} R</b>
+          </div>
         </div>
 
         <hr style={{ margin: "14px 0" }} />
 
-        <Sidebar
-          stats={(stats ?? []) as any}
-          activeDistrict={hoverDistrict}
-          onHoverDistrict={setHoverDistrict}
+        <Sidebar stats={(stats ?? []) as any} activeDistrict={hoverDistrict} onHoverDistrict={setHoverDistrict} />
+      </div>
+
+      {/* Divider (draggable slider) */}
+      <div
+        onMouseDown={() => {
+          draggingRef.current = true;
+          document.body.style.cursor = "col-resize";
+          document.body.style.userSelect = "none";
+        }}
+        style={{
+          width: 10,
+          cursor: "col-resize",
+          flex: "0 0 auto",
+          position: "relative",
+          zIndex: 999999, // Leaflet can't sit above this
+          background: "transparent",
+        }}
+        role="separator"
+        aria-label="Resize sidebar"
+      >
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: 0,
+            transform: "translateX(-50%)",
+            width: 2,
+            height: "100%",
+            borderRadius: 999,
+            background: "rgba(0,0,0,0.18)",
+          }}
         />
       </div>
 
       {/* Map */}
-      <div style={{ flex: 1 }}>
+      <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
         {!geojson || !stats ? (
           <div style={{ padding: 20 }}>Loading map data…</div>
         ) : (
